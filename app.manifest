@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity version="1.0.0.0" name="YourApplicationName" type="win32"/>
+  <description>Your Application Description</description>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+  <application>
+    <windowsSettings xmlns:ws2="http://schemas.microsoft.com/SMI/2005/WindowsSettings">
+      <ws2:dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</ws2:dpiAware>
+    </windowsSettings>
+  </application>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 11 -->
+      <supportedOS Id="{C9E559D6-53E5-4BB7-9EAA-A7B5A1A8B4A1}"/>
+      <!-- Windows 10 -->
+      <supportedOS Id="{8E0F7A12-BFB3-4FE8-B9A5-48FD50A15A9A}"/>
+    </application>
+  </compatibility>
+</assembly>
