@@ -166,6 +166,8 @@ int ChangeInt(int v, int speed, int Min, int Max)
 	return vv;
 }
 
+
+
 //绘制问好文字
 void DrawHelloText(RenWin& window,bool& isExit)
 {
@@ -176,7 +178,7 @@ void DrawHelloText(RenWin& window,bool& isExit)
 
 	static const string TextList[13] = {
 		"AI赋能，高效板书。",
-		"快速，便捷，轻量，极致",
+		"快速，便捷，轻量，极致，硬核",
 		"Hello，MiuBarrd " + VER + " 。",
 		"海上升明月，天涯共此时。",
 		"MiuBarrd " + VER + " 准备好啦。",
@@ -186,7 +188,7 @@ void DrawHelloText(RenWin& window,bool& isExit)
 		"初见如旧雨，重逢似晨星。",
 		"倾盖如故，白首如新。",
 		"MiuBarrd准备就绪。",
-		"适在AI，MiuBarrd已就绪",
+		"适在AI，MiuBarrd已就绪。",
 		"潮平连旧渡，星动识归人。"
 	};
 	static Color TextColorNow = Color::Black;
@@ -278,7 +280,6 @@ void DrawHelloText(RenWin& window,bool& isExit)
 		}
 	}
 
-
 	PutTextSay::Draw(
 		WindowSize.x / 2,
 		WindowSize.y / 2,
@@ -287,7 +288,7 @@ void DrawHelloText(RenWin& window,bool& isExit)
 	if(isExit) SleepFrame = 0;
 }
 
-vector<IMAGE> video;
+vector<IMAGE> UpdateImgs;
 
 
 
@@ -295,66 +296,262 @@ vector<IMAGE> video;
 //背景视频
 #pragma region MyRegion
 
-bool LoadVideoFinish = false;
-int VideoBackAlpha = 0;
-void PerLoad()
-{
-	VideoLoader::LoadVideo(video, filesystem::current_path().wstring() + L"\\Update.dll");
-	LoadVideoFinish = true;
-	VideoBackAlpha = 255;
-}
+bool CanUpdateExit = false;
 
-const int PLAY_VIDEO_FRAME_SLEEP = 3;
-//绘制视频
+const int PLAY_FRAME = 240;
+int PlayAlpha = 255;
+int PlayClock = 0;
+//绘制图片
 void DrawVideo(RenWin& window)
 {
-	if (!LoadVideoFinish) return;
-
+	CanUpdateExit = false;
 	static EV Scale;
 	static bool init = false;
 	if (!init)
 	{
-		Scale.SetAnimationStartValue(100);
-		Scale.SetAnimation(115, 240);
+		Scale.SetAnimationStartValue(70);
+		Scale.SetAnimation(60, 240);
+
+		vector<Path> imgs = XFile::ListFiles(filesystem::current_path().wstring() + L"\\Update");
+
+		for (int i = 0; i < imgs.size(); i++)
+		{
+			UpdateImgs.emplace_back();
+			XImage::NewImage(UpdateImgs[UpdateImgs.size() - 1], imgs[i].wstring());
+			XImageEx::ImageChange::Scale(
+				UpdateImgs[UpdateImgs.size() - 1],
+				WindowSize.x / (float)UpdateImgs[UpdateImgs.size() - 1].w,
+				WindowSize.y / (float)UpdateImgs[UpdateImgs.size() - 1].h);
+		}
 
 		init = true;
 	}
 
 	static int index = 0;
 
-	static int sleep = PLAY_VIDEO_FRAME_SLEEP;
+	static int sleep = PLAY_FRAME;
 
-	if (video.empty()) return;
+	if (UpdateImgs.empty()) return;
 
-	static float WScale = WindowSize.x / (float)video[0].w, HScale = WindowSize.y / (float)video[0].h;
+	static float WScale = WindowSize.x / (float)UpdateImgs[0].w, HScale = WindowSize.y / (float)UpdateImgs[0].h;
 
 	Scale.UpdateAnimation(XEase::EaseBasic::easeOut, 5);
 
-	static int x = WindowSize.x / 2, y = WindowSize.y / 2;
-	XImage::PutScaleImage(video[index], x,y, WScale * Scale.value / 100.0, HScale * Scale.value / 100.0, window,0.5,0.5);
+	static int x = WindowSize.x / 2, y = WindowSize.y / 3;
+	XImage::PutScaleImage(UpdateImgs[index], x,y, WScale * Scale.value / 100.0, HScale * Scale.value / 100.0, window,0.5,0.5);
 
-	if (sleep == 0)
+	
+	if (PlayClock < PLAY_FRAME)
 	{
-		index += 1;
-		if (index > video.size() - 1) index = 0;
+		PlayClock += 1;
 
-		sleep = PLAY_VIDEO_FRAME_SLEEP;
+		if (PlayAlpha - 15 > 0) PlayAlpha -= 15;
+		else PlayAlpha = 0;
 	}
 	else
 	{
-		sleep -= 1;
+		if (PlayAlpha + 15 < 255) PlayAlpha += 15;
+		else
+		{
+			PlayAlpha = 255;
+			PlayClock = 0;
+
+			index += 1;
+			if (index > UpdateImgs.size() - 1)
+			{
+				CanUpdateExit = true;
+				index = 0;
+			}
+		}
 	}
 
-	if (VideoBackAlpha > 0)
+	if (PlayAlpha > 0)
 	{
-		VideoBackAlpha = ChangeInt(VideoBackAlpha, -3, 0, 255);
-		XGraph::SetFillColor(Color(30, 30, 30, VideoBackAlpha));
+		XGraph::SetFillColor(Color(30, 30, 30, PlayAlpha));
 		XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
 	}
 }
 
 #pragma endregion
 
+EV Process;
+
+void UpdateThread()
+{
+	::Sleep(1000);
+
+	Process.SetAnimation(20, 30);
+
+	::Sleep(5000);
+
+	Process.SetAnimation(97, 30);
+
+	::Sleep(2000);
+
+	while (!CanUpdateExit)
+	{
+		::Sleep(10);
+	}
+
+	Process.SetAnimation(100,30);
+}
+
+EV UpdateTextY;
+void Update(RenWin& window)
+{
+	UpdateTextY.SetAnimationStartValue(WindowSize.y * 3 / 4);
+	UpdateTextY.SetAnimation(WindowSize.y * 2.2 / 3, 180);
+
+	Process.SetAnimationStartValue(0);
+
+	thread temp(UpdateThread);
+	temp.detach();
+
+	int backAlpha = 0;
+
+	window.requestFocus();
+
+	backAlpha = 255;
+
+	XWindow::SetBackGroundColor(Color(30, 30, 30));
+
+	bool isExit = false;
+
+	while (!XMsg::IsClose(window))
+	{
+		if (isExit && backAlpha >= 255) break;
+		else if (backAlpha > 0)
+		{
+			backAlpha -= 5;
+		}
+
+		if (window.hasFocus()) XSystem::Taskbar::SetTaskBarVisible(false);
+		else XSystem::Taskbar::SetTaskBarVisible(true);
+
+		XWindow::DelayFps(window, 60);
+
+		DrawVideo(window);
+
+		Process.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+		UpdateTextY.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+		XText::SetFontColor(User::MainColor);
+		XText::SetFontSize(35 * ScreenScale);
+		XText::SetFontAdjust(ADJUST_CENTER, ADJUST_TOP);
+		XText::Xyprintf(WindowSize.x / 2, UpdateTextY.value, "正在完成自动更新 - MiuBarrd 1.6.3.0                  已完成" + to_string((int)Process.end) + "%", window);
+
+		//进度条
+		static int y = WindowSize.y * 3.2 / 4;
+		static int x1 = WindowSize.x * 0.2, x2 = WindowSize.x * 0.8;
+		static int l = x2 - x1;
+
+		static int lw = WindowSize.x / 700;
+
+		XGraph::LineShape::SetLineWidth(lw);
+		XGraph::SetColor(Color(100, 100, 100));
+		XGraph::LineShape::Line(x1, y, x2, y, window);
+		XGraph::LineShape::SetLineWidth(lw * 5);
+		XGraph::SetColor(User::MainColor);
+		XGraph::LineShape::Line(x1, y, x1 + l * Process.value / 100.0, y, window);
+
+		if (Process.value >= 100) isExit = true;
+
+		if (isExit)
+		{
+			backAlpha = ChangeInt(backAlpha, 20, 0, 255);
+			XGraph::SetFillColor(Color(30, 30, 30, backAlpha));
+			XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
+		}
+		else
+		{
+			backAlpha = ChangeInt(backAlpha, -3, 0, 255);
+			if (backAlpha > 0)
+			{
+				XGraph::SetFillColor(Color(30, 30, 30, backAlpha));
+				XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
+			}
+		}
+	}
+}
+
+void DrawMicaBackground(
+	sf::RenderWindow& window,
+	float speed,
+	const sf::Color& baseColor
+)
+{
+	static sf::Shader shader;
+	static bool shaderLoaded = false;
+	static sf::Clock clock;
+	static sf::RectangleShape fullscreenQuad;
+
+	static const std::string fragSrc = R"(
+    uniform float u_time;
+        uniform float u_speed;
+        uniform vec2  u_resolution;
+        uniform vec3  u_baseColor;
+
+        void main()
+        {
+            vec2 uv = gl_FragCoord.xy / u_resolution.xy;
+            float t = u_time * u_speed * 0.3;
+
+            // 从 baseColor 派生两个辅助色
+            vec3 colA = u_baseColor * 0.4;                    // 深
+            vec3 colB = u_baseColor;                          // 主色
+            vec3 colC = clamp(u_baseColor * 1.25 + 0.08, 0.0, 1.0); // 亮
+
+            // 三个缓慢移动的渐变中心
+            vec2 c1 = vec2(0.3, 0.4) + vec2(sin(t * 0.7) * 0.2, cos(t * 0.5) * 0.15);
+            vec2 c2 = vec2(0.7, 0.6) + vec2(cos(t * 0.4) * 0.25, sin(t * 0.6) * 0.2);
+            vec2 c3 = vec2(0.5, 0.8) + vec2(sin(t * 0.3) * 0.15, cos(t * 0.8) * 0.1);
+
+            float d1 = 1.0 - smoothstep(0.0, 0.9, length(uv - c1));
+            float d2 = 1.0 - smoothstep(0.0, 0.8, length(uv - c2));
+            float d3 = 1.0 - smoothstep(0.0, 0.7, length(uv - c3));
+
+            vec3 color = colA;
+            color = mix(color, colB, d1 * 0.7);
+            color = mix(color, colC, d2 * 0.5);
+            color = mix(color, colB, d3 * 0.4);
+
+            // 极轻暗角
+            color *= 1.0 - 0.15 * length(uv - 0.5);
+
+            gl_FragColor = vec4(color, 1.0);
+        }
+)";
+
+	if (!shaderLoaded)
+	{
+		if (!shader.loadFromMemory(fragSrc, sf::Shader::Type::Fragment))
+		{
+			window.clear(baseColor);
+			return;
+		}
+		shaderLoaded = true;
+		fullscreenQuad.setSize(sf::Vector2f(1, 1));
+	}
+
+	sf::Vector2u winSize = window.getSize();
+	fullscreenQuad.setSize(sf::Vector2f((float)winSize.x, (float)winSize.y));
+
+	float elapsed = clock.getElapsedTime().asSeconds();
+
+	sf::Glsl::Vec3 base(
+		baseColor.r / 255.0f,
+		baseColor.g / 255.0f,
+		baseColor.b / 255.0f
+	);
+
+	shader.setUniform("u_time", elapsed);
+	shader.setUniform("u_speed", speed);
+	shader.setUniform("u_resolution", sf::Glsl::Vec2((float)winSize.x, (float)winSize.y));
+	shader.setUniform("u_baseColor", base);
+
+	sf::RenderStates states;
+	states.shader = &shader;
+	window.draw(fullscreenQuad, states);
+}
 
 void Hello(RenWin& window)
 {
@@ -362,9 +559,6 @@ void Hello(RenWin& window)
 	int backAlpha = 0;
 	
 	window.requestFocus();
-
-	thread LoadVideo(PerLoad);
-	LoadVideo.detach();
 
 	backAlpha = 255;
 
@@ -388,14 +582,15 @@ void Hello(RenWin& window)
 			isExit = true;
 		}
 
-		DrawVideo(window);
+		static Color BackColor = XColor::DarkColor(User::MainColor, 0.15);
+		DrawMicaBackground(window, 7.0, BackColor);
 
 		DrawHelloText(window,isExit);
 
 		XText::SetFontColor(User::MainColor);
 		XText::SetFontSize(25 * ScreenScale);
 		XText::SetFontAdjust(ADJUST_CENTER, ADJUST_TOP);
-		XText::Xyprintf(ScreenSize.x / 2, ScreenSize.y / 2 + 300, "点击任意区域继续", window);
+		XText::Xyprintf(WindowSize.x / 2, WindowSize.y * 3 / 4, "点击任意区域继续", window);
 
 		if (isExit)
 		{
@@ -423,6 +618,7 @@ void Hello(RenWin& window)
 
 void ShowUpdate(RenWin& window)
 {
+	Update(window);
 	Hello(window);
 }
 
@@ -440,12 +636,12 @@ bool Update::CheckUpdate(RenWin& window)
 
 			RightMessage::ShowMessage(L"MiuBarrd已成功更新至" + XString::Convert::utf8_to_wstring(VER), L"更新完成", RightMessageType_SUCCESS, true);
 
-			/*ofstream Up("Update.ini");
+			ofstream Up("Update.ini");
 			if (Up.is_open())
 			{
 				Up << VER;
 				Up.close();
-			}*/
+			}
 
 			return true;
 		}
@@ -458,12 +654,12 @@ bool Update::CheckUpdate(RenWin& window)
 
 		RightMessage::ShowMessage(L"MiuBarrd已成功更新至" + XString::Convert::utf8_to_wstring(VER), L"更新完成", RightMessageType_SUCCESS, true);
 
-		/*ofstream Up("Update.ini");
+		ofstream Up("Update.ini");
 		if (Up.is_open())
 		{
 			Up << VER;
 			Up.close();
-		}*/
+		}
 
 		return false;
 	}
