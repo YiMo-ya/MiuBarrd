@@ -302,10 +302,28 @@ int ChooseType(RenWin& window)
 				L"适合以后继续书写或更改"
 			};
 
+			static vector<wstring> warn = {
+				L"警告：",
+				L"Mwf文件只能保存纯板书！",
+				L"内部插入的思维导图和图片等元素会消失！"
+			};
+
 			XText::SetFontConfig(Color::White, FONTSIZE);
 			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
+
+			int y = BarH * 0.5;
 			for(int i = 0;i<dis.size();i++)
-				XText::Xyprintf(WindowSize.x / 100 + BarW * 1.3, BarH * 0.5 + UISpace * i * 1.3, dis[i], temp);
+			{
+				XText::Xyprintf(WindowSize.x / 100 + BarW * 1.3,y, dis[i], temp);
+				y += UISpace * 1.3;
+			}
+
+			XText::SetFontColor(Color(255, 100, 100));
+			for (int i = 0; i < warn.size(); i++)
+			{
+				XText::Xyprintf(WindowSize.x / 100 + BarW * 1.3, y, warn[i], temp);
+				y += UISpace * 1.3;
+			}
 		}
 		if (choose == 1)
 		{
@@ -975,7 +993,7 @@ static void DrawGradientRect(int x, int y, int w, int h, Color TopColor, Color B
 }
 
 // 颜色选择窗口
-Color ChooseColorWindow(const Color& cancelColor, RenderWindow& window)
+static Color ChooseColorWindow(const Color& cancelColor, RenderWindow& window)
 {
 	Color ReturnColor = cancelColor;
 	Color ChooseColorA = cancelColor;
@@ -2481,21 +2499,10 @@ class ExtBar
 	{
 		NeedEnterTerminal = true;
 	}
-	void StartElc()
+	void StartMindMap()
 	{
-		if (XFile::Exists(ExtenPath + L"Elc.exe"))
-		{
-			ShellExecuteW(NULL, L"open", (ExtenPath + L"Elc.exe").c_str(), NULL, NULL, SW_SHOW);
-
-			BottomMessage::AddMessage(106, L"正在加载：电学组件", BottomMessageType_SUCCESS, 180);
-		}
-		else
-		{
-			RightMessage::ShowMessage(
-				L"无法加载电学实验插件，这可能是MiuBarrd的配置出现错误，错误代码：NOLNK", L"加载插件", RightMessageType_ERROR);
-
-			BottomMessage::AddMessage(106, L"加载插件失败", BottomMessageType_ERROR, 180);
-		}
+		MindMap::Add();
+		BottomMessage::AddMessage(106, L"添加思维导图", BottomMessageType_SUCCESS, 180);
 	}
 
 	void Run(wstring path,wstring name = L"未知")
@@ -2505,7 +2512,7 @@ class ExtBar
 		else if (path == L"_MinNiMiuBarrd") StartMini();
 		else if (path == L"_AI") StartAI();
 		else if (path == L"_Terminal") StartTerminal();
-		else if (path == L"_Elc") StartElc();
+		else if (path == L"_MindMap") StartMindMap();
 		else
 		{
 			if (XFile::Exists(path))
@@ -2542,13 +2549,13 @@ public:
 #pragma region MyRegion
 
 			static wstring PerExtName[6] = {
-				L"计时器",L"几何图库",L"迷你黑板",L"语音助手",L"终端",L"电学组件"
+				L"计时器",L"思维导图",L"几何图库",L"迷你黑板",L"语音助手",L"终端"
 			};
 			static wstring PerExtImageName[6] = {
-				L"Clock.dll",L"GeometricLibrary.dll",L"MinNiMiuBarrd.dll",L"AI.dll",L"Terminal.dll",L"Elc.dll"
+				L"Clock.dll",L"MindMap.dll",L"GeometricLibrary.dll",L"MinNiMiuBarrd.dll",L"AI.dll",L"Terminal.dll"
 			};
 			static wstring PerExtPath[6] = {
-				L"_Clock",L"_GeometricLibrary",L"_MinNiMiuBarrd",L"_AI",L"_Terminal",L"_Elc"
+				L"_Clock",L"_MindMap",L"_GeometricLibrary",L"_MinNiMiuBarrd",L"_AI",L"_Terminal"
 			};
 
 			for (int i = 0; i < 6; i++)

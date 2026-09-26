@@ -5,7 +5,6 @@ class User
 {
 public:
 	static Color MainColor;
-	static int AA;
 
 	static bool EnableFixShape;
 	static bool EnableWriteAdjust;

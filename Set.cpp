@@ -324,49 +324,6 @@ void EnterSetting(RenWin& window)
 		}
 		y += RowH;
 
-		//2. 抗锯齿（圆形滑块）
-		{
-			int ox = (int)RowOffset[1].value;
-			int alpha = (int)RowAlpha[1].value;
-
-			XText::SetFontConfig(Color(255, 255, 255, alpha), FONTSIZE * 1.2);
-			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
-			XText::Xyprintf(RowX, y + RowH / 2 + ox, L"抗锯齿等级", window);
-
-			int sliderX = RowX + RowW * 0.5;
-			int sliderW = RowW * 0.4;
-			int sliderH = RowH * 0.5;
-			int sliderY = y + RowH / 2 - sliderH / 2 + ox;
-
-			//当前值在选项中的索引
-			int curIndex = 0;
-			for (int i = 0; i < AAOptionCount; i++)
-			{
-				if (User::AA == AAOptions[i]) { curIndex = i; break; }
-			}
-
-			float newValue = DrawCircleSlider(
-				sliderX, sliderY, sliderW, sliderH,
-				(float)curIndex, 0.0f, (float)(AAOptionCount - 1),
-				AAKnobScale, window);
-
-			int newIndex = (int)(newValue + 0.5f);
-			if (newIndex < 0) newIndex = 0;
-			if (newIndex > AAOptionCount - 1) newIndex = AAOptionCount - 1;
-
-			if (AAOptions[newIndex] != User::AA)
-			{
-				User::AA = AAOptions[newIndex];
-				Apply();
-			}
-
-			//显示当前值
-			XText::SetFontConfig(Color(255, 255, 255, alpha), FONTSIZE);
-			XText::SetFontAdjust(ADJUST_RIGHT, ADJUST_CENTER);
-			XText::Xyprintf(RowX + RowW, y + RowH / 2 + ox, to_wstring(User::AA), window);
-		}
-		y += RowH;
-
 		//3. 图形矫正
 		{
 			int ox = (int)RowOffset[2].value;

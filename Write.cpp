@@ -31,11 +31,328 @@ void Clamp(int& v, int MIN, int MAX)
 	v = min(MAX, v);
 }
 
+//自定义颜色
+#pragma region MyRegion
+
+static Vector2i GetMin(Vector2i size, float Scale)
+{
+	int sizeReturn = min(size.x, size.y);
+	sizeReturn *= Scale;
+	return Vector2i{ sizeReturn ,sizeReturn };
+}
+
+static VertexArray createGradientRectangle(
+	const Vector2f& position,
+	const Vector2f& size,
+	const Color& topColor,
+	const Color& bottomColor)
+{
+	// 使用 Triangles，需要6个顶点（2个三角形）
+	VertexArray vertices(PrimitiveType::Triangles, 6);
+
+	// 定义矩形的四个角点
+	Vector2f topLeft = position;
+	Vector2f topRight = position + Vector2f(size.x, 0);
+	Vector2f bottomRight = position + size;
+	Vector2f bottomLeft = position + Vector2f(0, size.y);
+
+	// 第一个三角形 (左上 -> 右上 -> 左下)
+	vertices[0].position = topLeft;
+	vertices[0].color = topColor;      // 顶部颜色
+
+	vertices[1].position = topRight;
+	vertices[1].color = topColor;      // 顶部颜色
+
+	vertices[2].position = bottomLeft;
+	vertices[2].color = bottomColor;   // 底部颜色
+
+	// 第二个三角形 (右上 -> 右下 -> 左下)
+	vertices[3].position = topRight;
+	vertices[3].color = topColor;      // 顶部颜色
+
+	vertices[4].position = bottomRight;
+	vertices[4].color = bottomColor;   // 底部颜色
+
+	vertices[5].position = bottomLeft;
+	vertices[5].color = bottomColor;   // 底部颜色
+
+	return vertices;
+}
+
+static void DrawGradientRect(int x, int y, int w, int h, Color TopColor, Color BottomColor, RenderWindow& window)
+{
+	// 绘制渐变矩形
+	auto gradient = createGradientRectangle(
+		Vector2f(x, y),
+		Vector2f(w, h),
+		TopColor,   // 顶部
+		BottomColor    // 底部
+	);
+
+	window.draw(gradient);
+}
+
+// 颜色选择窗口（公开实现，与 Tool.h 中的声明保持一致；
+// 不可加 static，否则其他翻译单元（如 Set.cpp）无法链接到该符号）
+Color ChooseColorWindow(const Color& cancelColor, RenderWindow& window)
+{
+	Color ReturnColor = cancelColor;
+	Color ChooseColorA = cancelColor;
+
+	static Vector2i LastMousePos = { 0,0 };
+
+	IMAGE ColorChooseImage;
+	if (!XImage::NewImage(ColorChooseImage, ImgPath + L"\\Color.dll"))
+	{
+		MsgS WrongMsg;
+		WrongMsg.audio = 2;
+		WrongMsg.text = "初始化控件错误";
+		WrongMsg.title = "错误";
+		WrongMsg.buttons = { "确定" };
+		WrongMsg.Ico = ICOTYPE_ERROR;
+		Message::ShowMessage(WrongMsg, L"MiuBarrd");
+
+		return cancelColor;
+	}
+
+	RenderWindow ColorChooseWindow;
+	XWindow::CreateGraphWindow(ColorChooseWindow, -1, -1, ScreenSize.x / 3, ScreenSize.y / 2, L"选择颜色", Style::Default);
+
+	HWND hWnd = ColorChooseWindow.getNativeHandle();
+	SetWindowLongPtr(hWnd, GWL_EXSTYLE,
+		WS_EX_TOPMOST);
+	SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+	ColorChooseWindow.requestFocus();
+
+	Image icon;
+	icon.loadFromFile(ImgPath + L"Icon.dll");
+	ColorChooseWindow.setIcon(icon);
+
+	ColorChooseWindow.setMinimumSize(Vector2u(ScreenSize.x / 3, ScreenSize.y / 2));
+
+	XWindow::DWM::SetWindowBackType(ColorChooseWindow, BACKTYPE_BLUR);
+	XWindow::DWM::ExtendIntoClientArea(ColorChooseWindow, -1, -1, -1, -1);
+	XWindow::DWM::SetWindowDarkMode(ColorChooseWindow, true);
+
+	SetWindowPos(ColorChooseWindow.getNativeHandle(), HWND_TOPMOST, (ScreenSize.x - ColorChooseWindow.getSize().x) / 2,
+		(ScreenSize.y - ColorChooseWindow.getSize().y) / 2, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+
+	Vector2i ChooseArrow = LastMousePos;
+
+	int BrightPrecent = 100;
+	bool isExit = false;
+
+	const wstring buttonText[2] = { L"选取",L"取消" };
+
+	int buttonWidth = ScreenSize.x / 14;
+	int buttonHeight = ScreenSize.y / 27;
+
+	while (1)
+	{
+		XWindow::DelayFps(ColorChooseWindow, 30);
+		ColorChooseWindow.clear(Color::Transparent);
+
+		Vector2i WindowSizeTemp = XWindow::GetWindowSize(ColorChooseWindow);
+
+		XGraph::SetFillColor(Color(10, 10, 10, 100));
+		XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSizeTemp.x, WindowSizeTemp.y, ColorChooseWindow);
+
+		Vector2i ColorImgSize = GetMin(WindowSizeTemp, 0.7);
+		XImage::PutScaleImage(ColorChooseImage,
+			ScreenSize.x / 100, ScreenSize.y / 70 + ScreenSize.y / 15,
+			ColorImgSize.x / 512.0, ColorImgSize.y / 512.0, ColorChooseWindow);
+
+		Vector2i imgPos(ScreenSize.x / 100, ScreenSize.y / 70 + ScreenSize.y / 15);
+
+		if (IsIconic(ColorChooseWindow.getNativeHandle()))
+		{
+			ShowWindow(ColorChooseWindow.getNativeHandle(), SW_RESTORE);
+		}
+
+		if (XMsg::MouseMsg::IsMousePress(VK::MouseLeft))
+		{
+			Vector2i MP = XMsg::MouseMsg::GetMousePosWindow();
+
+			// 检查是否点击在图片区域内
+			if (MP.x >= imgPos.x - ScreenSize.x / 100 && MP.x <= imgPos.x + ColorImgSize.x + ScreenSize.x / 100 &&
+				MP.y >= imgPos.y - ScreenSize.x / 100 && MP.y <= imgPos.y + ColorImgSize.y + ScreenSize.x / 100)
+			{
+				if (MP.x < imgPos.x) MP.x = imgPos.x;
+				if (MP.x > imgPos.x + ColorImgSize.x) MP.x = imgPos.x + ColorImgSize.x;
+				if (MP.y < imgPos.y) MP.y = imgPos.y;
+				if (MP.y > imgPos.y + ColorImgSize.y) MP.y = imgPos.y + ColorImgSize.y;
+
+				// 将窗口坐标映射到图片像素坐标
+				// 先取出纹理尺寸
+				Vector2u srcSize = ColorChooseImage.texture.getSize();
+				if (srcSize.x > 0 && srcSize.y > 0)
+				{
+					float fx = (MP.x - imgPos.x) / static_cast<float>(ColorImgSize.x);
+					float fy = (MP.y - imgPos.y) / static_cast<float>(ColorImgSize.y);
+
+					unsigned int ix = static_cast<unsigned int>(floorf(fx * srcSize.x));
+					unsigned int iy = static_cast<unsigned int>(floorf(fy * srcSize.y));
+					if (ix >= srcSize.x) ix = srcSize.x - 1;
+					if (iy >= srcSize.y) iy = srcSize.y - 1;
+
+					// 通过 copyToImage 读取像素
+					Image img = ColorChooseImage.texture.copyToImage();
+					Color sc = img.getPixel(Vector2u(ix, iy));
+
+					ChooseArrow = MP; LastMousePos = MP;
+
+					ChooseColorA = Color(sc.r, sc.g, sc.b, sc.a);
+					ReturnColor = XColor::AdjustColorBright(ChooseColorA, BrightPrecent);
+				}
+			}
+
+			if (XMsg::MouseMsg::IsMouseIn(ScreenSize.x / 20 + ColorImgSize.x, ScreenSize.y / 70 + ScreenSize.y / 15 - ScreenSize.x / 100,
+				ScreenSize.x / 75, ColorImgSize.y + ScreenSize.x / 50))
+			{
+				if (MP.y < ScreenSize.y / 70 + ScreenSize.y / 15) MP.y = ScreenSize.y / 70 + ScreenSize.y / 15;
+				if (MP.y > ScreenSize.y / 70 + ScreenSize.y / 15 + ColorImgSize.y) MP.y = ScreenSize.y / 70 + ScreenSize.y / 15 + ColorImgSize.y;
+				BrightPrecent = 100 - (MP.y - (ScreenSize.y / 70 + ScreenSize.y / 15)) * 100 / ColorImgSize.y;
+
+				ReturnColor = XColor::AdjustColorBright(ChooseColorA, BrightPrecent);
+			}
+
+		}
+
+		XGraph::SetColor(Color(150, 150, 150));
+		XGraph::LineShape::SetLineWidth(ScreenSize.x / 480);
+		XGraph::LineShape::Line(ChooseArrow.x - ScreenSize.x / 100, ChooseArrow.y, ChooseArrow.x + ScreenSize.x / 100, ChooseArrow.y, ColorChooseWindow);
+		XGraph::LineShape::Line(ChooseArrow.x, ChooseArrow.y - ScreenSize.x / 100, ChooseArrow.x, ChooseArrow.y + ScreenSize.x / 100, ColorChooseWindow);
+
+
+		XGraph::SetFillColor(ReturnColor);
+		int width = ScreenSize.x / 50;
+		XGraph::RectangleShape::FillRect_WithoutBorder(
+			ScreenSize.x / 50 + ColorImgSize.x, ScreenSize.y / 70 + ScreenSize.y / 15,
+			width, ColorImgSize.y, ColorChooseWindow);
+
+		DrawGradientRect(ScreenSize.x / 20 + ColorImgSize.x, ScreenSize.y / 70 + ScreenSize.y / 15,
+			width * 2 / 3, ColorImgSize.y, XColor::AdjustColorBright(ChooseColorA, 100), XColor::AdjustColorBright(ChooseColorA, 0),
+			ColorChooseWindow);
+
+		XGraph::SetFillColor(Color(100, 100, 100));
+		XGraph::CircleShape::FillCircle_WithoutBorder(
+			ScreenSize.x / 20 + ColorImgSize.x + width / 3, ScreenSize.y / 70 + ScreenSize.y / 15 + ColorImgSize.y * (100 - BrightPrecent) / 100,
+			width / 3, ColorChooseWindow);
+		XGraph::SetFillColor(Color(255, 255, 255));
+		XGraph::CircleShape::FillCircle_WithoutBorder(
+			ScreenSize.x / 20 + ColorImgSize.x + width / 3, ScreenSize.y / 70 + ScreenSize.y / 15 + ColorImgSize.y * (100 - BrightPrecent) / 100,
+			width / 5, ColorChooseWindow);
+
+		if (XMsg::IsClose(ColorChooseWindow))
+		{
+			ReturnColor = cancelColor;
+			break;
+		}
+		if (isExit)
+		{
+			break;
+		}
+		if (!ColorChooseWindow.hasFocus())
+		{
+			ColorChooseWindow.requestFocus();
+		}
+
+		for (int i = 0; i < 2; i++)
+		{
+			if (i == 0)
+			{
+				XGraph::SetFillColor(XColor::DarkColor(User::MainColor, 0.3));
+				XGraph::LineShape::SetLineWidth(ScreenSize.x / 500);
+				XGraph::RectangleShape::FillRoundRect_WithoutBorder(WindowSizeTemp.x - buttonWidth * (i + 1) * 6 / 5, WindowSizeTemp.y - buttonHeight * 7 / 5,
+					buttonWidth, buttonHeight, buttonHeight / 3, ColorChooseWindow);
+			}
+			else
+			{
+				XGraph::SetColor(XColor::DarkColor(XColor::GrayColor(User::MainColor, 0.6), 0.5));
+				XGraph::LineShape::SetLineWidth(ScreenSize.x / 500);
+				XGraph::RectangleShape::RoundRect(WindowSizeTemp.x - buttonWidth * (i + 1) * 6 / 5, WindowSizeTemp.y - buttonHeight * 7 / 5,
+					buttonWidth, buttonHeight, buttonHeight / 3, ColorChooseWindow);
+			}
+
+			if (i == 0) XText::SetFontColor(Color::White);
+			else XText::SetFontColor(Color(200, 200, 200));
+			XText::SetFontSize(ScreenSize.x / 100);
+			XText::SetFontAdjust(ADJUST_CENTER, ADJUST_CENTER);
+			XText::SetFontColor(Color::White);
+			XText::Xyprintf(WindowSizeTemp.x - buttonWidth * (i + 1) * 6 / 5 + buttonWidth / 2,
+				WindowSizeTemp.y - buttonHeight * 7 / 5 + buttonHeight / 2, buttonText[i], ColorChooseWindow);
+
+			if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft)
+				&&
+				XMsg::MouseMsg::IsMouseIn(WindowSizeTemp.x - buttonWidth * (i + 1) * 6 / 5, WindowSizeTemp.y - buttonHeight * 7 / 5,
+					buttonWidth, buttonHeight))
+			{
+				if (i == 1)
+				{
+					ReturnColor = cancelColor;
+				}
+				isExit = true;
+				break;
+			}
+		}
+
+		for (int i = 0; i < 3; i++)
+		{
+			int W = WindowSizeTemp.x - (ScreenSize.x / 20 + ColorImgSize.x + width * 2 / 3) - ScreenSize.x / 50;
+			int X = ScreenSize.x / 20 + ColorImgSize.x + width * 2 / 3 + ScreenSize.x / 100;
+			int H = ScreenSize.y / 25;
+			int Y = ScreenSize.y / 70 + ScreenSize.y / 15 + i * H * 13 / 10;
+
+			XGraph::SetFillColor(Color(70, 70, 70));
+			XGraph::SetColor(ReturnColor);
+
+			XGraph::RectangleShape::FillRoundRect_WithoutBorder(X, Y, W, H, H / 5, ColorChooseWindow);
+			XGraph::LineShape::SetLineWidth(ScreenSize.x / 480);
+			XGraph::LineShape::Line(X + H / 10, Y + H - ScreenSize.x / 960, X + W - H / 10, Y + H - ScreenSize.x / 960, ColorChooseWindow);
+
+			XText::SetFontSize(ScreenSize.x / 100);
+			XText::SetFontColor(Color::White);
+			XText::SetFontAdjust(ADJUST_CENTER, ADJUST_CENTER);
+
+			wstring text;
+
+			if (i == 0) text = L"R：" + to_wstring(ReturnColor.r);
+			if (i == 1) text = L"G：" + to_wstring(ReturnColor.g);
+			if (i == 2) text = L"B：" + to_wstring(ReturnColor.b);
+			XText::Xyprintf(X + W / 2, Y + H / 2, text, ColorChooseWindow);
+		}
+	}
+
+	XMsg::ResetCloseMsg();
+
+	XMsg::ClearMsg();
+	XMsg::UpdateMsg(window);
+	XMsg::ClearMsg();
+
+	ColorChooseWindow.close();
+
+	XWindow::SetBackGroundColor(Color(30, 30, 30));
+	return ReturnColor;
+}
+
+#pragma endregion
+
 #pragma endregion
 
 //启用展台
 bool WriteCamera::EnableWriteCamera = false;
 bool WriteCamera::EnableAutoPhoto = false;
+
+bool FlushWriteLayer = false;
+
+bool FlushImageLayer = false;
+
+//思维导图节点数据（extern 声明：定义见下方「思维导图」区域，
+// 此处提前声明供 Write::Show 处理调色请求时访问）
+extern vector<MindMap::Node> MindMapNodes;
+
+//按编号查找节点下标，找不到返回 -1（前向声明，定义见思维导图区域）
+static int MindMapIndexOf(int id);
 
 //归位量
 EV2 ResetPos;
@@ -114,7 +431,6 @@ vector< PageDataS > PageData = { PageDataS()};
 vector< PageDataS > CameraPageData = { PageDataS() };
 
 //获取当前正在使用的页面数据引用
-//返回值：展台开启且当前页为展台专用页(1000)时返回 CameraPageData，否则返回普通板书页数据
 PageDataS& GetCurPage()
 {
 	// 展台专用页使用独立的页面数据，避免与普通板书页互相干扰
@@ -341,6 +657,8 @@ RenderTexture LightLayer;
 RenderTexture WriteLayer;
 //图片层
 RenderTexture ImageLayer;
+//思维导图层
+RenderTexture MindMapLayer;
 
 //视觉特效
 #pragma region MyRegion
@@ -386,6 +704,1466 @@ void AddPer(int x, int y, int x2, int y2, Color color)
 }
 
 #pragma endregion
+
+//思维导图
+#pragma region MyRegion
+
+//思维导图节点数据
+vector<MindMap::Node> MindMapNodes;
+//当前选中节点编号（决定新子节点挂载到哪个父节点）
+int MindMapSelect = -1;
+//节点编号计数器
+int MindMapNextId = 0;
+//思维导图是否已被用户激活（只有点击插件添加后才显示，避免一进页面就自动出现）
+bool MindMapActived = false;
+//本帧触控是否落在思维导图的 + 按钮上：供书写系统判断是否跳过落笔，避免点击按钮时穿透书写
+bool MindMapBtnHit = false;
+//本次触控周期内是否曾命中过按钮（粘滞标记）：从按下到抬起期间持续为 true，
+//防止按住按钮时坐标轻微漂移导致中途漏屏蔽、进而发生书写穿透。
+bool MindMapWasBtnHit = false;
+//上一次触控状态：用于在 Update 内部识别「按下的一瞬间」
+bool MindMapLastTouch = false;
+//请求调色的节点编号：-1 表示无请求；由外部（Tool 层）读取后弹出调色窗口并复位
+int MindMapColorRequest = -1;
+//「按钮按住中」标记：从命中按钮的那一帧持续到抬手，用于全程抑制底线自动延展。
+// 之所以不能用「当帧命中」判断：抬手那一帧命中的是「无」，但 WriteSub 仍可能提交
+// 最后一次残留笔迹，从而把底线撑长；用本标记可覆盖到抬起当帧。
+bool MindMapBtnHold = false;
+
+//底线动态拓展的动画时长（帧），参照对齐线的缓动表现
+static const int MINDMAP_LINE_ANIM = 30;
+
+//内容底部到底线的间隙（父节与底线的美感空隙）
+static int MindMapLineGap()
+{
+	static int g = max(4, WindowSize.y / 90);
+	return g;
+}
+//新节点创建时的初始纵向落点偏移（父项底线 -> 新子项）。
+// 说明：这只是「创建瞬间的初值」，真正生效的位置由 MindMapLayoutNode 统一重排。
+// 因此该值不再承担「父子呼吸空隙」的职责（那是 MindMapSiblingGap 的活儿），
+// 取小值即可，避免初值过大导致首帧位置跳变明显。
+static int MindMapRowGap()
+{
+	static int g = max(6, WindowSize.y / 40);
+	return g;
+}
+
+//同级兄弟节点之间的最小纵向间距（行间距），同时也决定「父项与子项」的行距。
+//
+// 关键：这里是整棵树唯一的纵向节奏来源。
+// MindMapLayoutNode 中，子项的 minY 只取 parentBottom + MindMapSiblingGap()，
+// 因此本值每缩小一点，层与层之间的空隙就整体收紧一点；
+// 之前取 WindowSize.y / 16（偏大），导致「子项本身还有子项」时，
+// 每层都叠加一次该间距，视觉上纵向空隙迅速累积、显得非常空旷。
+// 现收紧到 WindowSize.y / 26，并保留「底线上方内容区」不被压到的下界，
+// 使父子、兄弟两层关系都保持紧凑但不拥挤。
+static int MindMapSiblingGap()
+{
+	static int g = max(6, WindowSize.y / 26);
+	return g;
+}
+//连接线「子项一侧」的断开缝隙（世界单位）。
+static int MindMapLinkDetach()
+{
+	static int d = max(10, WindowSize.y / 30);
+	return d;
+}
+
+//连接线「父项一侧」的断开缝隙（世界单位）。
+static int MindMapLinkDetachParent()
+{
+	static int d = max(10, WindowSize.y / 30);
+	return d;
+}
+
+//单个节点内容区的默认高度
+static int MindMapContentH()
+{
+	static int h = WindowSize.y / 10;
+	return h;
+}
+//连接线起点相对「父项最后一个按钮（调色按钮）」右缘的额外呼吸空隙（世界单位）。
+// 存在的意义：连线必须从三个按钮全部之后起笔，才不会被按钮压在下面；
+// 同时保留一小段空隙，避免连线紧贴按钮边缘。
+static int MindMapLinkStartPad()
+{
+	static int p = max(6, WindowSize.y / 60);
+	return p;
+}
+
+//按钮尺寸与间距的前向声明：
+// MindMapBtnZoneW 需要用到它们，但它们的定义在下方（便于按「由外到内」的顺序阅读）。
+static int MindMapBtnR();
+static int MindMapBtnSep();
+static int MindMapDelBtnSep();
+static int MindMapColorBtnSep();
+
+//节点「按钮区」占用的总宽度（世界单位）：+ / 删除(-) / 调色 三个圆点按钮，
+// 每个直径 2r，相邻圆心间距 r*2 + 对应间距。
+// 关键作用：连接线的起点与子节点的横向落点都以「按钮区右缘」为基准，
+// 这样按钮区变宽时连接线与子项会自动整体右移，不会被按钮覆盖。
+static int MindMapBtnZoneW()
+{
+	int r = MindMapBtnR();
+	// 底线尾 -> 第一个按钮圆心（sep + r），按钮区内部两段间距，最后一颗按钮半径 r
+	return MindMapBtnSep() + r + (r * 2 + MindMapDelBtnSep())
+		+ (r * 2 + MindMapColorBtnSep()) + r;
+}
+//底线右端 + 圆形按钮半径
+static int MindMapBtnR()
+{
+	// 在原尺寸基础上缩小 30%（0.7 倍），使按钮更精致、不抢底线视觉重心
+	static int r = max(7, (int)(WindowSize.y / 58 * 0.7));
+	return r;
+}
+//「删除(-)」按钮圆心与「调色」按钮圆心之间的横向间距
+static int MindMapDelBtnSep()
+{
+	static int s = max(8, WindowSize.y / 70);
+	return s;
+}
+//+ 按钮圆心与底线右端之间的间距（按钮与底线分离）
+static int MindMapBtnSep()
+{
+	static int s = max(8, WindowSize.y / 70);
+	return s;
+}
+//「调色」按钮圆心与 + 按钮圆心之间的横向间距
+static int MindMapColorBtnSep()
+{
+	static int s = max(8, WindowSize.y / 70);
+	return s;
+}
+//底线在手写内容之后额外保留的收尾长度（让底线比内容略长）
+static int MindMapLineTail()
+{
+	static int t = WindowSize.x / 30;
+	return t;
+}
+//横向层级缩进
+static int MindMapIndent()
+{
+	static int i = WindowSize.x / 10;
+	return i;
+}
+//底线相对内容左右额外延长量（呼吸空间，避免贴边）
+static int MindMapLinePad()
+{
+	static int p = WindowSize.x / 60;
+	return p;
+}
+
+//按编号查找节点下标，找不到返回 -1
+static int MindMapIndexOf(int id)
+{
+	if (id < 0) return -1;
+	for (int i = 0; i < (int)MindMapNodes.size(); i++)
+		if (MindMapNodes[i].id == id) return i;
+	return -1;
+}
+
+//递归收集某节点整棵子树（含自身）的编号
+static void MindMapCollectSubtree(int id, vector<int>& out)
+{
+	int idx = MindMapIndexOf(id);
+	if (idx < 0) return;
+
+	out.push_back(id);
+	for (int c : MindMapNodes[idx].children)
+		MindMapCollectSubtree(c, out);
+}
+
+//节点底线的初始长度（保证 + 按钮与底线始终可见、永不消逝）
+static int MindMapLineInitW()
+{
+	static int w = WindowSize.x / 10;
+	return w;
+}
+
+//推进所有节点底线的缓动动画（lineEase 从当前值逼近目标长度 lineW）。
+// 单独抽出成函数：Draw 与 Update 都按「激活态」门控，
+// 未激活时（首次激活前 / Clear 之后）若完全不跑缓动，
+// 底线会停在半途不再收敛，再次激活绘制时从残值突然续跳。
+// 因此无论是否激活，每帧都调用本函数保证动画连续。
+static void MindMapUpdateLineEase()
+{
+	for (auto& n : MindMapNodes)
+	{
+		// 目标长度与缓动终点不一致时，说明长度需要变化，启动一次缓动
+		if ((int)n.lineEase.end != n.lineW)
+		{
+			n.lineEase.SetAnimation(n.lineW, MINDMAP_LINE_ANIM);
+		}
+
+		n.lineEase.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+	}
+}
+
+//创建新节点并登记到数组；返回新节点编号
+static int MindMapCreateNode(int parent, int x, int y, Color color)
+{
+	MindMap::Node n;
+	n.id = MindMapNextId++;
+	n.parent = parent;
+	n.x = x;
+	n.y = y;
+	// 底线给一个初始长度：即使没有手写内容也始终显示底线和 + 按钮。
+	// 新节点直接以初始长度作为缓动起点，避免出现从 0 拉到初始值的异常动画。
+	n.lineW = MindMapLineInitW();
+	n.lineH = MindMapContentH();
+	n.color = color;
+	n.lineEase.SetAnimationStartValue(n.lineW);
+	n.lineEase.end = n.lineEase.value;
+
+	int idx = (int)MindMapNodes.size();
+	MindMapNodes.push_back(n);
+
+	if (parent >= 0)
+	{
+		int p = MindMapIndexOf(parent);
+		if (p >= 0)
+		{
+			MindMapNodes[idx].depth = MindMapNodes[p].depth + 1;
+			MindMapNodes[p].children.push_back(n.id);
+		}
+	}
+	else
+	{
+		MindMapNodes[idx].depth = 0;
+		MindMapSelect = n.id;
+	}
+
+	return n.id;
+}
+
+//递归排布节点：子节点统一排在父节点「右侧」，父节点纵向与子节点整体居中。
+// 布局分两步：
+//   1. 自顶向下：确定每个子节点的横坐标，并让子节点沿纵向依次堆叠；
+//   2. 自底向上：把子树占据的纵向包围区回传给父节点，父节点据此把自己的 y
+//      对齐到「所有子节点整体的中心」，实现父项永远居中子项。
+//parentRight 为父节点底线右端（按钮外侧）的横坐标，parentBottom 为父底线纵坐标；
+//outTop/outBottom 回传本子树占据的纵向包围区（含自身及其全部后代）。
+static void MindMapLayoutNode(int id, int startY, int& cursorY, int parentRight, int parentBottom,
+	int& outTop, int& outBottom)
+{
+	int idx = MindMapIndexOf(id);
+	if (idx < 0) { outTop = outBottom = startY; return; }
+
+	auto& node = MindMapNodes[idx];
+
+	if (node.parent < 0)
+	{
+		// 根节点固定在起排 Y，横坐标保持创建时的偏左位置
+		node.y = startY;
+	}
+	else
+	{
+		// 子节点横向：父节点「按钮区右缘」+ 一小段缩进 -> 落在父节点「右侧」。
+		// 关键：基准取「按钮区右缘」而非「底线右端」，因为按钮区（+ / 删除 / 调色）
+		// 本身就占据了一段横向空间；若以底线右端为基准，按钮区会与子项横向重叠，
+		// 从子底线左端出发的连接线也会被按钮压住、视觉上缩成一小截。
+		// 以按钮区右缘为基准后，按钮之后的全部元素（子项及其子树）都会整体右移。
+		node.x = parentRight + MindMapIndent() / 2;
+
+		// 子节点纵向：从父底线下方开始（父节点「下方」），
+		// 多个子节点沿游标依次向下堆叠，保证彼此不重叠。
+		//
+		// 关键：这里只保证「不压到父底线」——用一个较小的行间距即可。
+		// 旧实现用 MindMapRowGap()（父子的起始偏移）作为这里的下限，
+		// 结果每个子项都被推离父项一大段；当子项自身还有子项时，
+		// 每一层都再叠加一次这个大偏移，空隙迅速累积得非常大。
+		//
+		// 因此本处（父子行距）与「兄弟堆叠」共用同一个 MindMapSiblingGap()：
+		// 它既是「兄弟之间的最小间隔」，也是「父项与子项之间的最小间隔」，
+		// 整棵树的纵向节奏由此统一，嵌套多层时不会再逐层放大空隙。
+		int minY = parentBottom + MindMapSiblingGap();
+		int nodeY = max(cursorY, minY);
+		node.y = nodeY;
+	}
+
+	// 当前节点「按钮区右缘」，作为其子节点的横向参考点。
+	// 注意：用 lineEase.value（缓动后的实际长度）而非 lineW（目标长度），
+	// 保证布局基准与屏幕上实际画出的底线/按钮位置一致。
+	int myRight = node.x + (int)node.lineEase.value + MindMapBtnZoneW();
+	// 当前节点底线纵坐标，作为其子节点的纵向参考点
+	int myBottom = node.y + node.lineH + MindMapLineGap();
+
+	// 本子树纵向包围区：初始只含自身（内容顶 -> 底线底）
+	int subTop = node.y;
+	int subBottom = node.y + node.lineH + MindMapLineGap();
+
+	int nextCursor = node.y + node.lineH;
+	for (int c : node.children)
+	{
+		int childTop = 0, childBottom = 0;
+		MindMapLayoutNode(c, startY, nextCursor, myRight, myBottom, childTop, childBottom);
+		subTop = min(subTop, childTop);
+		subBottom = max(subBottom, childBottom);
+	}
+
+	// 自底向上居中：有子节点时，把父节点纵向对齐到「子节点整体中心」。
+	// 取子节点包围区中心作为锚点，减去父节点自身内容半高即得父节点 y，
+	// 使父节点的内容区在纵向上恰好居中于整组子项。
+	if (!node.children.empty())
+	{
+		int childTop = INT_MAX;
+		int childBottom = INT_MIN;
+		for (int c : node.children)
+		{
+			int ci = MindMapIndexOf(c);
+			if (ci < 0) continue;
+			auto& cn = MindMapNodes[ci];
+			childTop = min(childTop, cn.y);
+			childBottom = max(childBottom, cn.y + cn.lineH + MindMapLineGap());
+		}
+
+		if (childTop != INT_MAX)
+		{
+			int center = (childTop + childBottom) / 2;
+			node.y = center - node.lineH / 2;
+
+			// 根节点不允许被抬到起排线以上，避免顶部溢出画布
+			if (node.parent < 0 && node.y < startY) node.y = startY;
+
+			subTop = min(subTop, node.y);
+			subBottom = max(subBottom, node.y + node.lineH + MindMapLineGap());
+		}
+	}
+
+	// 游标推进到本子树最后一个节点底部
+	cursorY = nextCursor;
+	outTop = subTop;
+	outBottom = subBottom;
+}
+
+//把「属于某节点包围盒」的笔迹整体平移 (dx, dy)。
+// 关键：布局重排会改变节点位置，若不带动手写笔迹，文字会与底线/节点脱节。
+//
+// 【归属判定：中心点包含，而非包围盒相交】
+// 旧实现用「笔迹包围盒与节点包围盒相交」判定归属，这在思维导图场景下是错的：
+//   同一层级相邻节点的包围盒纵向只隔一个 MindMapSiblingGap()，而单笔手写
+//   笔迹的包围盒会明显超出其所属节点区间；只要某一笔同时压到两个节点的区间，
+//   它就会被两个节点同时命中。更关键的是：子节点的横向落点是
+//   父按钮区右缘 + 缩进，而父节点横向覆盖到「按钮区右缘」，二者本身就有重叠，
+//   于是父项右侧的内容会被判成子节点内容而跟着子项搬走 —— 表现为
+//   「父项写的东西新建子项后一半跑到子项去」。
+// 现在改为：取笔迹首尾的几何中心，只有中心点落在节点区间内才算属于该节点。
+// 中心点在平面内唯一，天然互斥，父子/兄弟不会再重复命中。
+//
+// 【横向右界：不得外扩按钮区】
+// 旧实现把 segR 取到「底线尾 + 按钮区宽度」，理由是"按钮之后的笔迹不属于本节点"。
+// 但这个右界恰好等于子节点的横向落点基准（子项 x = 父按钮区右缘 + 缩进），
+// 于是父项底线延展后，用户写在延展段 / 紧邻按钮一带的笔迹，中心点会落进
+// 「本节点按钮区」与「子节点区间」的公共区域，被判给子节点而跟着搬走 ——
+// 表现为「延展区里的东西还是会被搬走」。
+// 现在把右界收紧到「底线右端」，只保留一点点笔宽容差，既不吞掉按钮区，
+// 也不与子项的横向区间产生重叠，延展段的内容稳定归属父项。
+//
+// 分组约定：本函数被「按节点分组」调用。详见 MindMapBuildNodeStrokeGroups。
+static void MindMapCollectNodeHits(int nodeX, int nodeY, int effW, int lineH,
+	vector<pair<int, int>>& outHits)
+{
+	auto& page = GetCurPage();
+
+	int gap = MindMapLineGap();
+
+	// 当前节点判定区间（世界坐标）
+	int segL = nodeX;
+	int segR = nodeX + effW + MindMapLineTail();
+	int segT = nodeY;
+	int segB = nodeY + lineH + gap;
+
+	// 查自身下标，找父节点，算父按钮区右缘
+	int selfIdx = -1;
+	for (int i = 0; i < (int)MindMapNodes.size(); i++)
+	{
+		if (MindMapNodes[i].x == nodeX && MindMapNodes[i].y == nodeY)
+		{
+			selfIdx = i;
+			break;
+		}
+	}
+
+	// 父节点按钮区右缘（横向硬分界线）
+	int parentRightEdge = INT_MAX;
+	bool hasParent = false;
+	if (selfIdx >= 0)
+	{
+		int pid = MindMapNodes[selfIdx].parent;
+		if (pid >= 0)
+		{
+			int pidx = MindMapIndexOf(pid);
+			if (pidx >= 0)
+			{
+				hasParent = true;
+				auto& pn = MindMapNodes[pidx];
+				// 与布局基准完全一致：按钮区右缘 = x + lineEase + BtnZoneW
+				parentRightEdge = pn.x + (int)pn.lineEase.value + MindMapBtnZoneW();
+			}
+		}
+	}
+
+	for (int i = 0; i < (int)page.Data.size(); i++)
+	{
+		for (int k = 0; k < (int)page.Data[i].size(); k++)
+		{
+			auto& d = page.Data[i][k];
+
+			float cx = (d.x + d.x2) * 0.5f;
+			float cy = (d.y + d.y2) * 0.5f;
+
+			if (!(d.StartX < 0 && d.StartY < 0))
+			{
+				cx = (cx + d.StartX) * 0.5f;
+				cy = (cy + d.StartY) * 0.5f;
+			}
+
+			int px = (int)cx;
+			int py = (int)cy;
+
+			bool belongs = false;
+
+			if (hasParent && parentRightEdge != INT_MAX)
+			{
+				if (px < parentRightEdge)
+				{
+					// 横向在父按钮区左侧 → 只归父节点
+					// 当前如果是子节点，直接跳过
+					if (selfIdx >= 0 && MindMapNodes[selfIdx].parent >= 0)
+						continue;  // 子节点不抢父左侧的笔迹
+					else
+						belongs = true;  // 父节点直接收
+				}
+				else
+				{
+					// 横向在父按钮区右侧 → 走矩形包含
+					belongs = (px >= segL && px <= segR && py >= segT && py <= segB);
+				}
+			}
+			else
+			{
+				// 根节点：走矩形包含
+				belongs = (px >= segL && px <= segR && py >= segT && py <= segB);
+			}
+
+			if (belongs)
+				outHits.push_back({ i, k });
+		}
+	}
+}
+
+//把一组已命中的笔画（下标为「当前页 Data」索引）整体平移 (offset)。
+// 与命中检测分离：增量重排需要先对整棵树做完命中判定、再统一施加位移，
+// 否则先移动的笔迹会污染后移动节点的判定基准，产生重复位移。
+static void MindMapShiftStrokes(const vector<pair<int, int>>& hits, Vector2i offset)
+{
+	if (offset.x == 0 && offset.y == 0) return;
+
+	auto& page = GetCurPage();
+
+	for (auto& h : hits)
+	{
+		// 防御：索引可能因笔画被擦除而失效
+		if (h.first < 0 || h.first >= (int)page.Data.size()) continue;
+		if (h.second < 0 || h.second >= (int)page.Data[h.first].size()) continue;
+
+		auto& d = page.Data[h.first][h.second];
+		d.x += offset.x; d.y += offset.y;
+		d.x2 += offset.x; d.y2 += offset.y;
+		if (!(d.StartX < 0 && d.StartY < 0))
+		{
+			d.StartX += offset.x;
+			d.StartY += offset.y;
+		}
+	}
+}
+
+//重新计算整棵树位置。
+// 与旧实现的关键差异：布局会移动节点，节点包围盒内的手写笔迹必须同步平移，
+// 否则重排后文字留在原地、与节点脱节。
+//
+// 实现要点：把「记录旧几何 -> 重新布局 -> 按包围盒增量搬移笔迹」拆成两步。
+//   - MindMapLayoutAll：纯布局，写回节点的 x/y（含子项整体移动）；
+//   - MindMapShiftStrokesForDelta：按「新位置 - 旧位置」搬移各节点包围盒内的笔迹。
+// 拆分的意义在于 Update 中的「底线延展」也会改变几何，可复用同一套搬移逻辑，
+// 无需重复实现包围盒判定。
+static void MindMapLayoutAll()
+{
+	if (MindMapNodes.empty()) return;
+
+	// 找根节点
+	int root = -1;
+	for (auto& n : MindMapNodes)
+		if (n.parent < 0) { root = n.id; break; }
+
+	if (root < 0) return;
+
+	int startY = WindowSize.y / 6;
+	int cursor = startY;
+	int subTop = 0, subBottom = 0;
+	// 根节点无父节点，横/纵参考点传 0 即可（根节点位置由 startY 决定）
+	MindMapLayoutNode(root, startY, cursor, 0, 0, subTop, subBottom);
+}
+
+// 抹除「指定节点集合」包围盒内的手写笔迹。
+static void MindMapEraseStrokes(const vector<int>& ids)
+{
+	if (ids.empty()) return;
+
+	auto& page = GetCurPage();
+	int gap = MindMapLineGap();
+
+	vector<pair<int, int>> hits;
+
+	for (int id : ids)
+	{
+		int idx = MindMapIndexOf(id);
+		if (idx < 0) continue;
+
+		auto& n = MindMapNodes[idx];
+
+		// 父按钮区右缘（当前几何）
+		int parentRight = INT_MAX;
+		if (n.parent >= 0)
+		{
+			int pidx = MindMapIndexOf(n.parent);
+			if (pidx >= 0)
+			{
+				auto& pn = MindMapNodes[pidx];
+				parentRight = pn.x + (int)pn.lineEase.value + MindMapBtnZoneW();
+			}
+		}
+
+		int segL = n.x;
+		int segR = n.x + (int)n.lineEase.value + MindMapLineTail();
+		int segT = n.y;
+		int segB = n.y + n.lineH + gap;
+
+		for (int a = 0; a < (int)page.Data.size(); a++)
+		{
+			for (int b = 0; b < (int)page.Data[a].size(); b++)
+			{
+				auto& d = page.Data[a][b];
+
+				float cx = (d.x + d.x2) * 0.5f;
+				float cy = (d.y + d.y2) * 0.5f;
+				if (!(d.StartX < 0 && d.StartY < 0))
+				{
+					cx = (cx + d.StartX) * 0.5f;
+					cy = (cy + d.StartY) * 0.5f;
+				}
+
+				int px = (int)cx;
+				int py = (int)cy;
+
+				// 父按钮区左侧：子节点不删（保护父项内容）
+				if (parentRight != INT_MAX && px < parentRight)
+					continue;
+
+				bool inSeg = (px >= segL && px <= segR &&
+					py >= segT && py <= segB);
+
+				if (inSeg)
+					hits.push_back({ a, b });
+			}
+		}
+	}
+
+	if (hits.empty()) return;
+
+	sort(hits.begin(), hits.end());
+	hits.erase(unique(hits.begin(), hits.end()), hits.end());
+
+	// 倒序删除，保证下标有效
+	for (int i = (int)hits.size() - 1; i >= 0; i--)
+	{
+		int a = hits[i].first;
+		int b = hits[i].second;
+
+		if (a < 0 || a >= (int)page.Data.size()) continue;
+		if (b < 0 || b >= (int)page.Data[a].size()) continue;
+
+		page.Data[a].erase(page.Data[a].begin() + b);
+	}
+}
+
+// 按「新位置 - 旧位置」把各节点包围盒内的笔迹整体搬移。
+static void MindMapShiftStrokesForDelta(const vector<Vector2i>& oldPos,
+	const vector<int>& oldEffW,
+	const vector<int>& oldLineH)
+{
+	auto& page = GetCurPage();
+
+	// 计算某个节点在「旧几何」下的父按钮区右缘
+	auto ParentRightEdgeOld = [&](int nodeIdx) -> int
+		{
+			int pid = MindMapNodes[nodeIdx].parent;
+			if (pid < 0) return INT_MAX;
+
+			int pidx = MindMapIndexOf(pid);
+			if (pidx < 0) return INT_MAX;
+
+			// 在 oldPos / oldEffW 里找父节点对应下标
+			for (int j = 0; j < (int)oldPos.size(); j++)
+			{
+				if (MindMapNodes[pidx].x == oldPos[j].x &&
+					MindMapNodes[pidx].y == oldPos[j].y)
+				{
+					return oldPos[j].x + oldEffW[j] + MindMapBtnZoneW();
+				}
+			}
+			// 兜底：用当前父节点几何
+			auto& pn = MindMapNodes[pidx];
+			return pn.x + (int)pn.lineEase.value + MindMapBtnZoneW();
+		};
+
+	// ---------- 第一遍：收集命中（用旧几何） ----------
+	vector<pair<int, int>> hits;
+	for (int i = 0; i < (int)MindMapNodes.size(); i++)
+	{
+		auto& n = MindMapNodes[i];
+		int dx = n.x - oldPos[i].x;
+		int dy = n.y - oldPos[i].y;
+		if (dx == 0 && dy == 0) continue;
+
+		int parentRight = ParentRightEdgeOld(i);
+
+		int segL = oldPos[i].x;
+		int segR = oldPos[i].x + oldEffW[i] + MindMapLineTail();
+		int segT = oldPos[i].y;
+		int segB = oldPos[i].y + oldLineH[i] + MindMapLineGap();
+
+		for (int a = 0; a < (int)page.Data.size(); a++)
+		{
+			for (int b = 0; b < (int)page.Data[a].size(); b++)
+			{
+				auto& d = page.Data[a][b];
+
+				float cx = (d.x + d.x2) * 0.5f;
+				float cy = (d.y + d.y2) * 0.5f;
+				if (!(d.StartX < 0 && d.StartY < 0))
+				{
+					cx = (cx + d.StartX) * 0.5f;
+					cy = (cy + d.StartY) * 0.5f;
+				}
+
+				int px = (int)cx;
+				int py = (int)cy;
+
+				bool covered = false;
+
+				if (parentRight != INT_MAX)
+				{
+					if (px < parentRight)
+					{
+						// 父按钮区左侧：只归父节点
+						if (n.parent >= 0)
+							continue;   // 当前是子节点，不抢父左侧笔迹
+						covered = true; // 当前是父节点，收下
+					}
+					else
+					{
+						covered = (px >= segL && px <= segR &&
+							py >= segT && py <= segB);
+					}
+				}
+				else
+				{
+					// 根节点：自身矩形
+					covered = (px >= segL && px <= segR &&
+						py >= segT && py <= segB);
+				}
+
+				if (covered)
+					hits.push_back({ a, b });
+			}
+		}
+	}
+
+	// 去重
+	sort(hits.begin(), hits.end());
+	hits.erase(unique(hits.begin(), hits.end()), hits.end());
+
+	if (hits.empty()) return;
+
+	// ---------- 第二遍：每个笔画取“最深命中节点”的位移 ----------
+	for (auto& h : hits)
+	{
+		int bestDepth = -1;
+		Vector2i bestOffset{ 0, 0 };
+
+		for (int i = 0; i < (int)MindMapNodes.size(); i++)
+		{
+			auto& n = MindMapNodes[i];
+			int dx = n.x - oldPos[i].x;
+			int dy = n.y - oldPos[i].y;
+			if (dx == 0 && dy == 0) continue;
+
+			int parentRight = ParentRightEdgeOld(i);
+
+			int segL = oldPos[i].x;
+			int segR = oldPos[i].x + oldEffW[i] + MindMapLineTail();
+			int segT = oldPos[i].y;
+			int segB = oldPos[i].y + oldLineH[i] + MindMapLineGap();
+
+			if (h.first < 0 || h.first >= (int)page.Data.size()) continue;
+			if (h.second < 0 || h.second >= (int)page.Data[h.first].size()) continue;
+
+			auto& d = page.Data[h.first][h.second];
+
+			float cx = (d.x + d.x2) * 0.5f;
+			float cy = (d.y + d.y2) * 0.5f;
+			if (!(d.StartX < 0 && d.StartY < 0))
+			{
+				cx = (cx + d.StartX) * 0.5f;
+				cy = (cy + d.StartY) * 0.5f;
+			}
+
+			int px = (int)cx;
+			int py = (int)cy;
+
+			bool covered = false;
+			if (parentRight != INT_MAX)
+			{
+				if (px < parentRight)
+				{
+					if (n.parent >= 0) continue;
+					covered = true;
+				}
+				else
+				{
+					covered = (px >= segL && px <= segR &&
+						py >= segT && py <= segB);
+				}
+			}
+			else
+			{
+				covered = (px >= segL && px <= segR &&
+					py >= segT && py <= segB);
+			}
+
+			if (covered && n.depth > bestDepth)
+			{
+				bestDepth = n.depth;
+				bestOffset = { dx, dy };
+			}
+		}
+
+		if (bestDepth >= 0)
+		{
+			vector<pair<int, int>> one{ h };
+			MindMapShiftStrokes(one, bestOffset);
+		}
+	}
+}
+
+//重新计算整棵树位置，并把各节点包围盒内的笔迹同步平移。
+static void MindMapRelayout()
+{
+	if (MindMapNodes.empty()) return;
+
+	// 记录重排前的节点位置、实际底线长度与内容高度（三者同源），
+	// 供笔迹搬移计算位移量、命中区间与纵向跨度
+	vector<Vector2i> oldPos(MindMapNodes.size());
+	vector<int> oldEffW(MindMapNodes.size());
+	vector<int> oldLineH(MindMapNodes.size());
+	for (int i = 0; i < (int)MindMapNodes.size(); i++)
+	{
+		oldPos[i] = { MindMapNodes[i].x, MindMapNodes[i].y };
+		oldEffW[i] = (int)MindMapNodes[i].lineEase.value;
+		oldLineH[i] = MindMapNodes[i].lineH;
+	}
+
+	MindMapLayoutAll();
+
+	// 按「新位置 - 旧位置」搬移各节点包围盒内的笔迹
+	MindMapShiftStrokesForDelta(oldPos, oldEffW, oldLineH);
+
+	// 笔迹被移动后需要整体重绘历史层，否则画布上仍是旧位置的像素
+	FlushWriteLayer = true;
+}
+
+void MindMap::Reset()
+{
+	MindMapNodes.clear();
+	MindMapSelect = -1;
+	MindMapNextId = 0;
+
+	// 建立根节点：横向偏左，纵向中上部
+	int x = WindowSize.x / 8;
+	int y = WindowSize.y / 6;
+	MindMapCreateNode(-1, x, y, User::MainColor);
+
+	// 激活思维导图，此后才允许绘制
+	MindMapActived = true;
+}
+
+void MindMap::Clear()
+{
+	MindMapNodes.clear();
+	MindMapSelect = -1;
+	MindMapNextId = 0;
+
+	// 回到未激活状态：Draw/Update 将不再绘制任何内容，
+	// 与画布"擦除全部"的清屏语义保持一致。
+	MindMapActived = false;
+}
+
+void MindMap::Add()
+{
+	// 首次添加（用户点击了工具栏"思维导图"）时创建根节点并激活；
+	// 激活后 Draw/Update 才会真正生效，未激活时页面不会自动出现思维导图。
+	if (!MindMapActived || MindMapNodes.empty())
+	{
+		MindMap::Reset();
+		return;
+	}
+
+	// 单实例约束：整张画布只允许存在一个思维导图。
+	// 已激活且已存在节点时，再次点击工具栏「思维导图」不应新建第二个根节点，
+	// 否则会出现两张互相独立的思维导图（各自有根、各自布局）叠在同一页上。
+	// 这里直接弹窗提示并返回，交由用户决定是继续在现有导图上操作还是先删除它。
+	//
+	// 注意区分两种调用来源：
+	//   - 工具栏「思维导图」插件：走本方法，命中此提示；
+	//   - 节点上的 + 按钮：走 AddChild()，用于给已有节点追加子项，
+	//     语义上是"扩充现有导图"而非"再建一张导图"，因此不受本约束限制。
+	Message::ShowMessage("当前页面已存在思维导图，无法重复添加。\n请先删除现有思维导图后再添加。",
+		"提示", ICOTYPE_WARNING, { "确定" }, 3, L"MiuBarrd");
+	return;
+}
+
+int MindMap::AddChild()
+{
+	// 尚无任何节点（未激活 / 已清屏）时无从挂载子项，直接返回
+	if (!MindMapActived || MindMapNodes.empty()) return -1;
+
+	// 挂载到当前选中节点；无有效选中则挂到根节点
+	int parentId = MindMapSelect;
+	if (MindMapIndexOf(parentId) < 0)
+	{
+		for (auto& n : MindMapNodes)
+			if (n.parent < 0) { parentId = n.id; break; }
+	}
+
+	int pIdx = MindMapIndexOf(parentId);
+	if (pIdx < 0) return -1;
+
+	auto& parent = MindMapNodes[pIdx];
+
+	// 子节点横坐标按层级缩进
+	int x = parent.x + MindMapIndent();
+	int y = parent.y + parent.lineH + MindMapRowGap();
+
+	int newId = MindMapCreateNode(parentId, x, y, parent.color);
+
+	// 关键修复：新增子节点后，选中态保持在其父节点上（而非新子节点）。
+	// 原因：
+	//   1) 用户点「父项 + 」的心理预期是"继续给这个父项加并列子项"，
+	//      若把选中态挪到新子项上，连续点击会变成层层嵌套（子 -> 孙 -> 曾孙），
+	//      不符合"给同一父项加多个子项"的操作直觉；
+	//   2) 旧实现把选中态落到新子项，导致 Update 中"锁定被点父节点长度"的
+	//      补偿代码锁错了对象，父项底线仍随 children.size() 增长而自动延展。
+	//      虽然底线长度现已与子节点数量解耦，这里仍保持选中态落在父项上，
+	//      使行为与长度规则一致、语义清晰。
+	MindMapSelect = parentId;
+
+	MindMapRelayout();
+
+	return newId;
+}
+
+void MindMap::Del()
+{
+	if (MindMapNodes.empty()) return;
+
+	int idx = MindMapIndexOf(MindMapSelect);
+	if (idx < 0) return;
+
+	// 根节点的删除规则：
+	//   只有当整张思维导图「只剩这一个根节点」时才允许删除（并连带清空整张图），
+	//   否则保留原有的保护逻辑，避免误删根节点导致整棵子树一起消失。
+	if (MindMapNodes[idx].parent < 0)
+	{
+		if (MindMapNodes.size() != 1) return;
+
+		// 删除唯一根节点等价于清空思维导图：
+		// 复位为未激活状态，Draw/Update 将不再绘制任何内容。
+		MindMap::Clear();
+		return;
+	}
+
+	int parentId = MindMapNodes[idx].parent;
+
+	vector<int> delIds;
+	MindMapCollectSubtree(MindMapSelect, delIds);
+
+	// 从父节点的 children 列表摘除
+	int p = MindMapIndexOf(parentId);
+	if (p >= 0)
+	{
+		auto& ch = MindMapNodes[p].children;
+		ch.erase(remove(ch.begin(), ch.end(), MindMapSelect), ch.end());
+	}
+
+	// 按编号移除整棵子树（避免边删边导致下标错位）
+	for (int id : delIds)
+	{
+		int i = MindMapIndexOf(id);
+		if (i >= 0) MindMapNodes.erase(MindMapNodes.begin() + i);
+	}
+
+	MindMapSelect = parentId;
+	MindMapRelayout();
+}
+
+void MindMap::Update()
+{
+	// 触控坐标是「屏幕坐标」，而节点存储的是「世界坐标」。
+	// 这里把屏幕坐标反变换回世界坐标再做命中检测，
+	// 否则平移/缩放画布后，按钮判定仍停留在原位，导致点不到按钮。
+	Vector2i screenPos = XMsg::TouchMsg::GetTouchPos();
+	bool touching = IsTouching();
+
+	// 尚未激活时（用户从未点过"思维导图"插件），只更新动画，不做交互判定也不绘制。
+	// 这样一进页面不会莫名出现一个空白节点。
+	//
+	// 关键：未激活时也必须推进底线的缓动动画。
+	// 原因：Draw 与 Update 都按激活态门控，若此处直接 return，
+	// 则在「首次激活前」或「Clear 回到未激活」之后，节点底线的 lineEase
+	// 会停在半途不再收敛；等到再次激活绘制时，底线会从残值处突然继续，
+	// 表现为动画卡顿/闪跳。这里先跑一次纯动画推进，保证无论是否激活，
+	// 缓动状态始终连续、可收敛。
+	if (!MindMapActived)
+	{
+		MindMapBtnHit = false;
+		MindMapWasBtnHit = false;
+
+		// 未激活态下仅推进底线缓动（无交互、无命中判定）
+		MindMapUpdateLineEase();
+		return;
+	}
+
+	// 鼠标/触控坐标可能位于窗口外，先做一次合法性检查
+	if (screenPos.x < 0 || screenPos.y < 0)
+	{
+		MindMapBtnHit = false;
+	}
+
+	// 只在「按下的一瞬间」触发，避免长按连续添加。
+	// 静态状态需保留在函数内部，因此这里用文件级静态变量记录上一次触控状态。
+	bool pressed = touching && !MindMapLastTouch;
+	MindMapLastTouch = touching;
+
+	// 屏幕坐标 -> 世界坐标（与 Draw 中的 SX/SY 互为逆变换）
+	// 约定：屏幕 = 世界 * scale + CameraPos * scale，因此逆变换为
+	//       世界 = 屏幕 / scale - CameraPos。
+	// 这里用 double 参与中间运算再取整，避免每次缩放后逐级取整导致累积偏移。
+	auto& pd = GetCurPage();
+	float scale = pd.Scale / 100.0f;
+	if (scale <= 0.0001f) return;
+	int posX = (int)std::floor(screenPos.x / (double)scale - pd.CameraPos.x);
+	int posY = (int)std::floor(screenPos.y / (double)scale - pd.CameraPos.y);
+
+	// 命中检测的坐标策略：与 Draw 完全一致地走「世界坐标 -> 屏幕坐标」正变换。
+	//
+	// 为什么不用「把触控点反变换到世界坐标」：
+	//   Draw 里按钮圆心是 SX(a) + sep + r 逐项取整后相加得到的（见 Draw 中 bx），
+	//   SX(a) = (int)(a * scale + camX) 有一次向下取整；
+	//   而反变换走的是 screen/scale - CameraPos，是另一条取整路径。
+	//   两条路径的取整误差在 scale != 1 时方向与大小都不一致，
+	//   缩放到非整数倍后判定圆心与视觉圆心系统性错开（表现为「检测位置左偏」）。
+	// 现在改为对每个按钮圆心复用与绘制完全相同的表达式与取整顺序，
+	// 保证判定点与视觉点逐像素重合。
+	(void)posX; (void)posY;
+
+	// 世界坐标 -> 屏幕坐标（与 Draw 中的 SX/SY 严格一致）
+	float camX = pd.CameraPos.x * scale;
+	float camY = pd.CameraPos.y * scale;
+	auto SX = [&](int x) { return (int)(x * scale + camX); };
+	auto SY = [&](int y) { return (int)(y * scale + camY); };
+
+	int r = MindMapBtnR();
+	int sep = MindMapBtnSep();
+	int gap = MindMapLineGap();
+	int pad = MindMapLinePad();
+
+	// ② 先做 + 按钮命中检测（每帧都算，不限于按下瞬间）：
+	// 目的是把「光标是否落在按钮上」这一信息暴露给书写系统，
+	// 使点击按钮时触控不会"穿透"到底层画布留下笔迹。
+	//
+	// 关键：按钮的视觉位置由 Draw 按「世界坐标 * scale + CameraPos * scale」映射，
+	// 因此这里必须按同一变换把按钮圆心换算到屏幕坐标再判定；
+	// 若直接用世界坐标比较，缩放后判定位置会与视觉位置错位（点不中按钮）。
+	int hoverBtn = -1;
+	int hoverDepth = -1;
+	int hoverColorBtn = -1;
+	int hoverColorDepth = -1;
+	int hoverDelBtn = -1;
+	int hoverDelDepth = -1;
+	{
+		// 命中半径在世界下是 r，映射到屏幕后应随 scale 同步放大；
+		// 再加 2 像素的固定容差（屏幕单位），兼顾触控手指的接触面积。
+		// 这样命中区与按钮的视觉范围在任何缩放级别下都严格对应。
+		int hitR = max(2, (int)(r * scale) + 2);
+		int hitR2 = hitR * hitR;
+
+		for (auto& n : MindMapNodes)
+		{
+			// 按钮圆心（屏幕坐标）：复用与 Draw 完全相同的取整顺序，
+			// 即先 SX(底线右端) 取整，再加 sep 与 r —— 避免两条取整路径产生偏移。
+			int lineY = SY(n.y + n.lineH + gap);
+			int x2 = SX(n.x + (int)n.lineEase.value);
+			int bx = x2 + sep + r;
+			int by = lineY;
+
+			int dx = screenPos.x - bx, dy = screenPos.y - by;
+			if (dx * dx + dy * dy <= hitR2 && n.depth > hoverDepth)
+			{
+				hoverDepth = n.depth;
+				hoverBtn = n.id;
+			}
+
+			// 调色按钮：位于 + 按钮右侧（相距 r*2 + 色块间距），与 + 按钮等半径
+			// 注意：删除(-)按钮与调色按钮已交换位置 —— 调色按钮现在排在
+			// 删除按钮之后（更靠右），因此这里与 Draw 中的绘制顺序保持一致。
+			int dbx = bx + r * 2 + MindMapDelBtnSep();
+			int ddx = screenPos.x - dbx, ddy = screenPos.y - by;
+			if (ddx * ddx + ddy * ddy <= hitR2 && n.depth > hoverDelDepth)
+			{
+				hoverDelDepth = n.depth;
+				hoverDelBtn = n.id;
+			}
+
+			// 调色按钮：位于删除按钮右侧（相距 r*2 + 色块间距），与 + 按钮等半径
+			int cbx = dbx + r * 2 + MindMapColorBtnSep();
+			int cdx = screenPos.x - cbx, cdy = screenPos.y - by;
+			if (cdx * cdx + cdy * cdy <= hitR2 && n.depth > hoverColorDepth)
+			{
+				hoverColorDepth = n.depth;
+				hoverColorBtn = n.id;
+			}
+		}
+	}
+
+	bool CanAddLineLengh = true;
+
+	// 全局标记：本帧触控是否落在思维导图的 + 按钮 / 调色按钮上。
+	// 书写系统（WriteSub）会据此跳过落笔，避免点击按钮时画出多余笔画。
+	//
+	// 关键：这里用「本次触控周期内是否曾命中过按钮」做**粘滞**标记。
+	// 原因：WriteSub 与 MindMap::Update 在同一帧内的执行顺序可能使本帧尚未
+	// 计算出命中结果，而手指按下后的一两帧内坐标会轻微漂移、可能短暂移出按钮，
+	// 若仅按当帧瞬时命中判定，就会出现「按住按钮拖动时中途漏屏蔽」的书写穿透。
+	// 一旦在本次触控周期内命中过按钮，就屏蔽到手指抬起为止，可彻底杜绝穿透。
+	bool curHit = (hoverBtn >= 0 || hoverColorBtn >= 0 || hoverDelBtn >= 0);
+	if (touching)
+	{
+		if (curHit) MindMapWasBtnHit = true;
+	}
+	else
+	{
+		// 手指抬起：结束本次触控周期，重置粘滞标记
+		MindMapWasBtnHit = false;
+	}
+	MindMapBtnHit = MindMapWasBtnHit;
+
+	// 点击 + 按钮或调色按钮后，本节点底线不应再「自动延展」。
+	//
+	// 为什么不能只在按下那一帧置 false：
+	//   点按钮后弹出色盘或立刻新增子节点，用户手指/鼠标常在按钮上停留或轻微移动，
+	//   同一次触控周期内 WriteSub 仍会产生少量笔迹点（WriteDataTemp 非空），
+	//   而此前 CanAddLineLengh 只对「按下帧」关闭，后续帧又恢复为 true，
+	//   于是这些残留笔迹的包围盒命中了本节点，把 target 撑大 —— 表现为
+	//   「一点 + 或选色，底线就自己变长」。
+	// 修复：把抑制条件扩展到「本次触控周期内曾命中过按钮」的整个区间。
+	bool onBtn = (hoverBtn >= 0 || hoverColorBtn >= 0 || hoverDelBtn >= 0);
+
+	if (pressed)
+	{
+		// 仅在真正命中按钮时才抑制延展；点在空白处不应影响底线的正常书写延展
+		if (onBtn) MindMapBtnHold = true;
+	}
+	else if (touching && onBtn)
+	{
+		// 触控仍在按钮上：持续抑制，避免弹窗/新增过程中的残留笔迹撑长底线
+		MindMapBtnHold = true;
+	}
+	// 抬起：结束本次按钮按住周期（下一帧 WriteDataTemp 已被 WriteSub 清空，安全）
+	if (!touching) MindMapBtnHold = false;
+
+	// 按钮按住期间（含抬起当帧）一律不延展底线：
+	// 让抑制覆盖到「抬手提交残留笔迹」的那一帧，彻底避免点 + 后底线自己变长。
+	if (MindMapBtnHold) CanAddLineLengh = false;
+
+	if (pressed)
+	{
+		if (hoverColorBtn >= 0)
+		{
+			// 点击调色按钮：只登记「调色请求」，不在此处弹窗。
+			// 原因：Update 没有窗口参数，而 ChooseColorWindow 需要 RenderWindow&；
+			// 实际弹窗在 Write::Show(window) 中通过 TakeColorRequest() 取出后执行。
+			MindMapSelect = hoverColorBtn;
+			MindMapColorRequest = hoverColorBtn;
+		}
+		else if (hoverBtn >= 0)
+		{
+			// 点击 + 按钮：选中该节点并给它追加一个子节点。
+			// 走 AddChild() 而非 Add()：Add() 是工具栏入口，带单实例约束
+			// （已存在导图时会弹提示并拒绝），而 + 按钮的语义是扩充现有导图，
+			// 必须直接追加子项。
+			MindMapSelect = hoverBtn;
+			MindMap::AddChild();
+
+			// 注意：这里不再需要"锁定父底线长度"的补偿逻辑。
+			// 底线长度已改为只由「初始长度 + 用户真实书写包围盒」决定，
+			// 与子节点数量解耦，因此新增子项不会再把父底线撑长。
+
+			// AddChild 内部已保持选中态落在被点击的父节点上（便于连续并列添加），
+			// 这里再显式赋一次，确保后续连续点击 + 始终给同一父项加并列子项。
+			MindMapSelect = hoverBtn;
+		}
+		else if (hoverDelBtn >= 0)
+		{
+			// 点击 - 按钮：删除该节点及其整棵子树（根节点会被 Del 内部保护）。
+			// 关键：点击「父项」的 - 按钮时，其旗下全部子项（含孙项）必须一并删除。
+			// 做法是先按子树收集要删除的节点编号，再把子树内笔迹抹掉，最后交给 Del()
+			// 递归摘除节点 —— 否则节点没了、手写内容仍留在画布上，形成「删除不干净」。
+			MindMapSelect = hoverDelBtn;
+			{
+				vector<int> delIds;
+				MindMapCollectSubtree(hoverDelBtn, delIds);
+				MindMapEraseStrokes(delIds);
+			}
+			MindMap::Del();
+
+			// 删除后重建历史书写层，避免已抹除的笔迹仍残留在画布像素上
+			FlushWriteLayer = true;
+		}
+		else
+		{
+			// 普通点选底线区域：切换选中节点。
+			// 同样改到屏幕坐标下判定（与按钮命中口径一致），
+			// 避免缩放后「点底线选不中、点空白却选中」的错位。
+			int best = -1;
+			int bd = -1;
+			for (auto& n : MindMapNodes)
+			{
+				int lx = SX(n.x - pad);
+				int ly = SY(n.y - pad);
+				int lw = SX(n.x + n.lineW + pad) - lx;
+				int lh = SY(n.y + n.lineH + gap + pad) - ly;
+				if (screenPos.x >= lx && screenPos.x <= lx + lw &&
+					screenPos.y >= ly && screenPos.y <= ly + lh && n.depth > bd)
+				{
+					bd = n.depth;
+					best = n.id;
+				}
+			}
+			if (best >= 0) MindMapSelect = best;
+		}
+	}
+
+	// 底线动态延展。基础长度恒为初始长度，实时书写时再按「属于该节点的笔迹」
+	// 单独延展，避免多个节点互相干扰。
+	//
+	// 关键修复：底线不再随子节点数量变长。
+	// 旧实现为 baseW + children.size() * perChild，导致父节点每新增一个子项，
+	// 底线目标长度就增加一段 perChild；又因「长度只增不减」，表现为
+	// 「子项变多后，点父项 + 新建子项，父项底线会自动延展」。
+	// 现在把长度与 children.size() 解耦，只由初始长度和用户真实笔迹决定。
+	// （lineW 为目标长度，lineEase.value 为当前长度，二者由下方缓动衔接。）
+	int baseW = MindMapLineInitW();
+
+	// 收集当前「本次书写」的笔迹包围盒（世界坐标）。
+	// 注意：不能把所有已落笔笔画都统计进来，否则任一节点的内容都会让所有节点一起延展。
+	int writeRight = INT_MIN;
+	int writeLeft = INT_MAX;
+	int writeTop = INT_MAX;
+	int writeBottom = INT_MIN;
+	for (auto& d : WriteDataTemp)
+	{
+		writeLeft = min(writeLeft, (int)min(d.x, d.x2));
+		writeRight = max(writeRight, (int)max(d.x, d.x2));
+		writeTop = min(writeTop, (int)min(d.y, d.y2));
+		writeBottom = max(writeBottom, (int)max(d.y, d.y2));
+	}
+	const bool hasWrite = !WriteDataTemp.empty();
+
+	// 记录位置与「实际底线长度」的旧快照：用于判断本轮底线是否被延展，
+	// 以及延展后按包围盒把子项与笔迹一并搬移。
+	vector<Vector2i> oldPos(MindMapNodes.size());
+	vector<int> oldEffW(MindMapNodes.size());
+	for (int i = 0; i < (int)MindMapNodes.size(); i++)
+	{
+		oldPos[i] = { MindMapNodes[i].x, MindMapNodes[i].y };
+		oldEffW[i] = (int)MindMapNodes[i].lineEase.value;
+	}
+
+	if (CanAddLineLengh)
+	{
+		for (auto& n : MindMapNodes)
+		{
+			int target = baseW;
+
+			// 只有「当前选中节点」才允许被本笔画延展
+			if (n.id == MindMapSelect)
+			{
+				target += MindMapLinePad();
+
+				if (hasWrite)
+				{
+					// 当前节点的横向区间（不扩按钮区）
+					int segL = n.x;
+					int segR = n.x + n.lineW + MindMapLineTail();
+
+					// 纵向区间：内容区到底线
+					int contentUp = n.lineH / 2;
+					int segT = n.y - contentUp;
+					int segB = n.y + n.lineH + gap;
+
+					// 笔迹包围盒与本节点区间相交
+					bool inSeg = !(writeRight < segL || writeLeft > segR ||
+						writeBottom < segT || writeTop > segB);
+
+					if (inSeg)
+					{
+						int need = writeRight - n.x + MindMapLineTail();
+						if (need > target) target = need;
+					}
+				}
+			}
+
+			// 长度只增不减
+			if (target < n.lineW) target = n.lineW;
+			n.lineW = target;
+		}
+	}
+
+	// 底线动态拓展：以缓动方式逼近各节点的目标长度（参照对齐线的动画逻辑）。
+	// 关键：lineEase.value 才是「当前实际长度」，lineW 是目标长度。
+	// 这里复用 MindMapUpdateLineEase()，与未激活分支走同一套推进逻辑，
+	// 保证「激活 / 未激活」两种状态下的动画行为完全一致、状态连续。
+	MindMapUpdateLineEase();
+
+	// 底线延展后，父项「按钮区右缘」右移，子项及其子树必须整体右移；
+	// 否则子项会被父项变长后的底线/按钮压住，连接线跨度也会被压缩。
+	//
+	// 关键：这里按「布局基准」而不是「缓动值」判断是否需要重排。
+	// 布局里子节点 x 取自父节点 lineEase.value（当前长度），缓动每帧都在变，
+	// 若按缓动值逐帧重排，会变成每帧都在微调子项位置（抖动且开销大）。
+	// 因此只在「目标长度」发生实质变化时才重排一次，重排时布局自动读取
+	// 当时的 lineEase.value，子项会平滑地跟着父项底线一起右移。
+	bool layoutDirty = false;
+	for (int i = 0; i < (int)MindMapNodes.size(); i++)
+	{
+		if (MindMapNodes[i].lineW != oldEffW[i] && MindMapNodes[i].lineW != MindMapLineInitW())
+		{
+			layoutDirty = true;
+			break;
+		}
+	}
+
+	// 底线变化会改变子项落点：重排（同时按包围盒搬移笔迹）。
+	// 注意：重排只做一次，避免与缓动同频抖动；笔迹搬移在重排内部完成，
+	// 因此「父项写字 -> 底线自动延展 -> 子项与笔迹一起右移」形成完整闭环。
+	if (layoutDirty) MindMapRelayout();
+}
+
+bool MindMap::IsBtnHit()
+{
+	return MindMapBtnHit;
+}
+
+int MindMap::TakeColorRequest()
+{
+	// 取出后立即复位：同一次点击只应触发一次调色窗口
+	int id = MindMapColorRequest;
+	MindMapColorRequest = -1;
+	return id;
+}
+
+void MindMap::Draw(RenderTarget& dest)
+{
+	// 未激活（用户还没点过"思维导图"）时不绘制，避免自动出现
+	if (!MindMapActived) return;
+
+	if (MindMapNodes.empty()) return;
+
+	int r = MindMapBtnR();
+	int sep = MindMapBtnSep();
+	int gap = MindMapLineGap();
+	int lw = max(2, WindowSize.y / 260);
+
+	// 坐标变换：与笔画一致，世界坐标经 CameraPos 平移、Scale 缩放后落到屏幕，
+	// 这样平移/缩放画布时思维导图会跟随移动，不会"钉死"在屏幕上。
+	auto& pd = GetCurPage();
+	float scale = pd.Scale / 100.0f;
+	float camX = pd.CameraPos.x * scale;
+	float camY = pd.CameraPos.y * scale;
+
+	// 世界坐标 -> 屏幕坐标
+	auto SX = [&](int x) { return (int)(x * scale + camX); };
+	auto SY = [&](int y) { return (int)(y * scale + camY); };
+
+	// 每帧直接绘制到目标，避免离屏图层的脏标记导致内容只显示一帧就消失
+	// ① 先画父子连接线（颜色取父节点，完全不透明）
+	// 样式（单条平滑曲线，无竖线）：
+	// 默认以一条三次贝塞尔从「父节点按钮之后」连到「子底线头（左端）」上方；
+	// 当父项只有一个子项、或父子底线纵向重合（同一 y）时，改用一条水平实线直连，
+	// 使「一对一」与「同层平铺」这两种简单情形呈现更干净、更符合直觉的直线连接。
+	//
+	// 控制点的取法决定了曲线的观感：
+	//   - 第一个控制点排在父端右侧、纵向基本不抬升，使出笔方向贴近水平，起步平缓；
+	//   - 第二个控制点排在子端左侧、纵向基本不抬升，使收笔方向同样贴近水平，落笔平缓；
+	//   - 两控制点横向分处两端、纵向差被刻意压小，使整条曲线呈现"平滑 S 形"，
+	//     而不是旧实现那种中段过陡、近似对角的折线感。
+	//
+	// 父端起点：定位到「父项右侧全部按钮之后」，保证连线不从按钮中间穿出；
+	// 子端终点：相对子底线左端上移 detachC，与子项留出明显空隙。
+	XGraph::LineShape::SetLineWidth(lw);
+	for (auto& n : MindMapNodes)
+	{
+		// 父节点起点：位于父项「三个按钮全部之后」（+ / 删除(-) / 调色）再留一段空隙。
+		// 底线尾 = n.x + lineEase.value；按钮区总宽度由 MindMapBtnZoneW() 统一给出，
+		// 这样按钮尺寸 / 间距调整时起点会自动跟着右移，不会压在按钮上。
+		//
+		// 与之配套：子节点的横向落点同样以「按钮区右缘」为基准
+		// （见 MindMapLayoutNode 中子节点 x 的计算），因此按钮区变宽时
+		// 子项会整体右移，连接线始终有完整跨度，不会被压成"指向箭头"。
+		int pTail = n.x + (int)n.lineEase.value;
+		int afterBtn = pTail + MindMapBtnZoneW() + MindMapLinkStartPad();
+		int px = SX(afterBtn);
+		int py = SY(n.y + n.lineH + gap);
+
+		for (int c : n.children)
+		{
+			int ci = MindMapIndexOf(c);
+			if (ci < 0) continue;
+
+			auto& child = MindMapNodes[ci];
+
+			// 子节点底线「头」（左端）作为终点
+			int cx = SX(child.x);
+			int cy = SY(child.y + child.lineH + gap);
+
+			// 连线使用完全不透明的父节点颜色
+			Color lc = n.color;
+			lc.a = 255;
+			XGraph::SetColor(lc);
+
+			// 子端断开：终点在子底线左端上方止步，缝隙随缩放同步缩放。
+			int detachC = max(3, (int)(MindMapLinkDetach() * scale));
+
+			// 实线判定：父项只有一个子项，或父子底线纵向几乎重合（同一 y）时，
+			// 直接用一条水平实线连接，简洁直观。
+			// 用屏幕坐标下的纵向差做判定，并给一点容差，避免取整误差导致漏判。
+			bool straightLine = (n.children.size() == 1) || (abs(cy - py) <= max(2, (int)(4 * scale)));
+
+			if (straightLine)
+			{
+				// 水平实线：从父端按钮之后直连到子底线左端（略上移 detachC 留缝）
+				XGraph::LineShape::Line((float)px, (float)py, (float)cx, (float)(cy - detachC), dest);
+				continue;
+			}
+
+			float x0 = (float)px;
+			float y0 = (float)py;
+			float x3 = (float)cx;
+			float y3 = (float)(cy - detachC);
+
+			// 采样点数：足够密以保证曲线平滑，又不至于在极端缩放时产生过多 draw call
+			const int SEG = 32;
+
+			// 控制点横向推进量：取水平跨度的 0.55 倍，使曲线腰部过渡更舒展、不易自交。
+			float hSpan = (float)abs(cx - px);
+			float ctrl = hSpan * 0.55f;
+			if (ctrl < 1.0f) ctrl = 1.0f;
+
+			// 控制点纵向位置：贴着两端（各取纵向差的 1/5），让两端切线更接近水平，
+			// 从而形成"起笔平缓 - 中段平滑上扬 - 收笔平缓"的柔和 S 形，
+			// 相比旧实现的 1/3 取值，中段腰部的拐折明显更缓、更美观。
+			float c1x = x0 + ctrl;
+			float c1y = y0 + (y3 - y0) * 0.2f;
+			float c2x = x3 - ctrl;
+			float c2y = y3 - (y3 - y0) * 0.2f;
+
+			// 三次贝塞尔单点求值：P0/P3 为端点，P1/P2 为控制点
+			auto CubicAt = [](float p0, float p1, float p2, float p3, float t)
+				{
+					float mt = 1.0f - t;
+					return mt * mt * mt * p0
+						+ 3.0f * mt * mt * t * p1
+						+ 3.0f * mt * t * t * p2
+						+ t * t * t * p3;
+				};
+
+			// 逐段采样绘制这条单段三次贝塞尔（全程无竖直/水平直段）
+			float lastX = x0;
+			float lastY = y0;
+
+			for (int s = 1; s <= SEG; ++s)
+			{
+				float t = (float)s / SEG;
+				float nx = CubicAt(x0, c1x, c2x, x3, t);
+				float ny = CubicAt(y0, c1y, c2y, y3, t);
+				XGraph::LineShape::Line(lastX, lastY, nx, ny, dest);
+				lastX = nx; lastY = ny;
+			}
+		}
+	}
+
+	// ② 再画每个节点：底线 + 右端圆形按钮 + 加号
+	for (auto& n : MindMapNodes)
+	{
+		int lineY = SY(n.y + n.lineH + gap);
+		int x1 = SX(n.x);
+		int x2 = SX(n.x + (int)n.lineEase.value);
+
+		// 永不消逝的底线（固定颜色）
+		XGraph::SetColor(n.color);
+		XGraph::LineShape::SetLineWidth(lw);
+		XGraph::LineShape::Line(x1, lineY, x2, lineY, dest);
+
+		// + 按钮：与底线分离，位于底线右端再向右 sep 处，半径更小
+		int bx = x2 + sep + r;
+		int by = lineY;
+		XGraph::SetFillColor(n.color);
+		XGraph::CircleShape::FillCircle_WithoutBorder(bx, by, r, dest);
+
+		// 圆上的白色加号
+		int arm = (int)(r * 0.5f);
+		int aw = max(2, lw);
+		XGraph::SetColor(Color::White);
+		XGraph::LineShape::SetLineWidth(aw);
+		XGraph::LineShape::Line(bx - arm, by, bx + arm, by, dest);
+		XGraph::LineShape::Line(bx, by - arm, bx, by + arm, dest);
+
+		// 删除(-)按钮：位于 + 按钮右侧，圆形背景 + 深色减号，用于删除该节点及其子树
+		// 注意：本按钮与调色按钮已交换位置 —— 现在删除按钮排在 + 之后、调色之前。
+		int dbx = bx + r * 2 + MindMapDelBtnSep();
+		int dby = by;
+		XGraph::SetFillColor(Color(240, 240, 240));
+		XGraph::CircleShape::FillCircle_WithoutBorder(dbx, dby, r, dest);
+		// 圆上的减号：使用 Color(30,30,30) 深色显示，保证在浅色按钮底上清晰可辨
+		XGraph::SetColor(Color(30, 30, 30));
+		XGraph::LineShape::SetLineWidth(aw);
+		XGraph::LineShape::Line(dbx - arm, dby, dbx + arm, dby, dest);
+
+		// 调色按钮：位于删除按钮右侧，圆形背景 + 中心色块，用于自定义该节点颜色
+		int cbx = dbx + r * 2 + MindMapColorBtnSep();
+		int cby = by;
+		XGraph::SetFillColor(Color(240, 240, 240));
+		XGraph::CircleShape::FillCircle_WithoutBorder(cbx, cby, r, dest);
+		// 中心色块填充当前节点颜色，直观表示该节点的配色
+		XGraph::SetFillColor(n.color);
+		XGraph::CircleShape::FillCircle_WithoutBorder(cbx, cby, max(2, r - max(2, lw)), dest);
+	}
+}
+
+#pragma endregion
+
 
 //柳叶笔
 #pragma region MyRegion
@@ -504,14 +2282,9 @@ static bool LineHitRect(int x1, int y1, int x2, int y2, int rx, int ry, int rw, 
 }
 
 static int EraseStf = WindowSize.x;
-bool NeedErase(const int& sx1, const int& sy1, const int& sx2, const int& sy2, bool IsLeaf = false,const int& ssx1 = -1,const int& ssy1 = -1)
+bool NeedErase(const int& sx1, const int& sy1, const int& sx2, const int& sy2, Vector2i& ErasePos, bool IsLeaf = false, const int& ssx1 = -1, const int& ssy1 = -1)
 {
 	if (!IsErasing || Tool::IsInBar) return false;
-
-	Vector2i erasePos = XMsg::MouseMsg::GetMousePosWindow();
-
-	int ex = erasePos.x - Write::EraseSize / ScreenScale * EraseStf;
-	int ey = erasePos.y - Write::EraseSize * 1.4 / ScreenScale * EraseStf;
 
 	int rw = Write::EraseSize * 2 / ScreenScale * EraseStf,rh = Write::EraseSize * 2.8 / ScreenScale * EraseStf;
 
@@ -536,20 +2309,20 @@ bool NeedErase(const int& sx1, const int& sy1, const int& sx2, const int& sy2, b
 
 	if(!IsLeaf)
 	{
-		if (sx1 > ex && sy1 > ey && sx1 < ex + rw && sy1 < ey + rh)
+		if (sx1 > ErasePos.x - rw / 2 && sy1 > ErasePos.y - rh / 2 && sx1 < ErasePos.x + rw && sy1 < ErasePos.y + rh)
 			return true;
-		if (sx2 > ex && sy2 > ey && sx2 < ex + rw && sy2 < ey + rh)
+		if (sx2 > ErasePos.x - rw / 2 && sy2 > ErasePos.y - rh / 2 && sx2 < ErasePos.x + rw && sy2 < ErasePos.y + rh)
 			return true;
 	}
 	else if(ssx1 > -1 && ssy1 > -1)
 	{
-		if (sx1 > ex && sy1 > ey && sx1 < ex + rw && sy1 < ey + rh)
+		if (sx1 > ErasePos.x - rw / 2 && sy1 > ErasePos.y - rh / 2 && sx1 < ErasePos.x + rw && sy1 < ErasePos.y + rh)
 			return true;
-		if (sx2 > ex && sy2 > ey && sx2 < ex + rw && sy2 < ey + rh)
+		if (sx2 > ErasePos.x - rw / 2 && sy2 > ErasePos.y - rh / 2 && sx2 < ErasePos.x + rw && sy2 < ErasePos.y + rh)
 			return true;
 
-		if (LineHitRect(ssx1, ssy1, sx1, sy1, ex, ey, rw, rh)) return true;
-		if (LineHitRect(ssx1, ssy1, sx2, sy2, ex, ey, rw, rh)) return true;
+		if (LineHitRect(ssx1, ssy1, sx1, sy1, ErasePos.x, ErasePos.y, rw, rh)) return true;
+		if (LineHitRect(ssx1, ssy1, sx2, sy2, ErasePos.x, ErasePos.y, rw, rh)) return true;
 	}
 
 	return false;
@@ -589,7 +2362,7 @@ void DrawEraseRect(RenWin& window)
 //绘制
 #pragma region MyRegion
 
-bool FlushWriteLayer = false;
+
 //绘制书写层
 void DrawLayer(RenderTarget& window)
 {
@@ -601,6 +2374,8 @@ void DrawLayer(RenderTarget& window)
 	static Vector2i CamPosTemp;
 	static int ScaleTemp = -1;
 	const bool contentDirty = FlushWriteLayer || IsErasing;
+
+	Vector2i ErasePos = XMsg::MouseMsg::GetMousePosWindow();
 
 	if (contentDirty)
 	{
@@ -685,7 +2460,7 @@ void DrawLayer(RenderTarget& window)
 					{
 						if (data.StartX < 0 && data.StartY < 0)
 						{
-							if (NeedErase(sx1, sy1, sx2, sy2))
+							if (NeedErase(sx1, sy1, sx2, sy2, ErasePos))
 							{
 								swap(pd.Data[i][k], pd.Data[i].back());
 								pd.Data[i].pop_back();
@@ -695,7 +2470,7 @@ void DrawLayer(RenderTarget& window)
 						}
 						else
 						{
-							if (NeedErase(sx1, sy1, sx2, sy2, true, ssx1, ssy1))
+							if (NeedErase(sx1, sy1, sx2, sy2, ErasePos, true, ssx1, ssy1))
 							{
 								swap(pd.Data[i][k], pd.Data[i].back());
 								pd.Data[i].pop_back();
@@ -898,11 +2673,11 @@ void DrawNowLayer(RenderTarget& window)
 
 			if(!WriteCamera::EnableWriteCamera)
 			{
-				if (data.w < Tool::PenSize)data.w += 0.4 * scale;
+				if (data.w < Tool::PenSize) data.w += 0.4 * scale;
 			}
 			else
 			{
-				if (data.w < Tool::PenSize / 3)data.w += 0.1 * scale;
+				if (data.w < Tool::PenSize / 3) data.w += 0.15 * scale;
 			}
 				
 		}
@@ -945,7 +2720,6 @@ void DrawNowLayer(RenderTarget& window)
 	}
 }
 
-bool FlushImageLayer = false;
 //绘制图片层
 static int SkipImageIndex = -1;
 void EditImage(int i, RenWin& window);
@@ -1430,6 +3204,22 @@ void WriteSub(RenWin& window)
 	if (IsTouching()
 		&& !Tool::IsInBar && TouchNum < 2)
 	{
+		// 触控落在思维导图的 + 按钮 / 调色按钮上时，跳过落笔：
+		// 否则点击按钮会穿透到底层画布，在按钮位置留下多余笔画，
+		// 该短笔画还会让所属节点的底线被误判为「有内容」而错误延展。
+		// 命中范围同时包含 + / 调色 / 删除(-) 三个按钮。
+		if (MindMap::IsBtnHit())
+		{
+			// 关键：清空本帧已累积的按钮触控笔迹，防止它被提交成真实笔画
+			WriteDataTemp.clear();
+			AdjustLineLine.enabled = false;
+
+			// 同步重置书写参考点，避免按钮点击结束后与后续笔画连成一条线
+			LastPoint.x = LastPoint.y = -1;
+			LeafPenStartPoint.x = LeafPenStartPoint.y = -1;
+			return;
+		}
+
 		if(WritePos != LastPoint || WriteDataTemp.empty())
 		{
 			if (WritePos.x < 1 || WritePos.y < 1) return;
@@ -1834,18 +3624,15 @@ void Write::Show(RenWin& window)
 	//设置更改
 	if (UpdateUser > 0)
 	{
-		sf::ContextSettings rtSettings;
-		rtSettings.antiAliasingLevel = User::AA;
-
 		sf::Vector2u rtSize(
 			static_cast<unsigned int>(WindowSize.x),
 			static_cast<unsigned int>(WindowSize.y)
 		);
 
-		WriteTempLayer = RenderTexture(rtSize, rtSettings);
+		WriteTempLayer = RenderTexture(rtSize);
 
-		WriteLayer = RenderTexture(rtSize, rtSettings);
-		LightLayer = RenderTexture(rtSize, rtSettings);
+		WriteLayer = RenderTexture(rtSize);
+		LightLayer = RenderTexture(rtSize);
 		ImageLayer = RenderTexture(rtSize);
 
 		WriteTempLayer.clear(Color::Transparent);
@@ -1873,6 +3660,35 @@ void Write::Show(RenWin& window)
 
 	//绘制橡皮擦
 	DrawEraseRect(window);
+
+	//更新思维导图（按钮命中、节点选中、底线拓展）
+	MindMap::Update();
+
+	//处理思维导图的调色请求：点击颜色按钮后弹出色盘并写回节点颜色。
+	// 放在这里是因为 ChooseColorWindow 需要 RenderWindow&，而 Update 没有窗口参数。
+	{
+		int colorReq = MindMap::TakeColorRequest();
+		if (colorReq >= 0)
+		{
+			int ci = MindMapIndexOf(colorReq);
+			if (ci >= 0)
+			{
+				Color picked = ChooseColorWindow(MindMapNodes[ci].color, window);
+				// 改色需连带整棵子树：父项换色后子项继承同一配色，保持导图视觉统一。
+				// 这里收集「自身 + 全部后代」的编号后统一写回，而非只改当前节点。
+				vector<int> colorIds;
+				MindMapCollectSubtree(colorReq, colorIds);
+				for (int id : colorIds)
+				{
+					int i = MindMapIndexOf(id);
+					if (i >= 0) MindMapNodes[i].color = picked;
+				}
+			}
+		}
+	}
+
+	//绘制思维导图（底线、连接线、+ 按钮）
+	MindMap::Draw(window);
 
 	//绘制对齐线
 	DrawAdjustLine(window);
@@ -2145,6 +3961,10 @@ void Write::EraseAll()
 	GetCurPage().Data.clear();
 
 	GetCurPage().Data.emplace_back();
+
+	// 清屏同步清除思维导图：重置为未激活状态，
+	// 避免清屏后仍残留思维导图（与"清屏"语义保持一致）。
+	MindMap::Clear();
 
 	FlushWriteLayer = true;
 }
@@ -2743,48 +4563,134 @@ void EditImage(int i, RenWin& window)
 //文件管理
 #pragma region MyRegion
 
-//判断某页是否存在需要导出的实际内容（笔画或图片）。
-//导出时用它过滤掉"仅被占位创建、实际为空"的页面，避免多导出不存在的页。
+// 导出分辨率倍率：2x 保证清晰，可调 3x（文件更大）
+static const float EXPORT_RES_SCALE = 2.0f;
+
+// ===== 思维导图导出绘制（无按钮，底线延展替代） =====
+static void MindMapDrawToExport(RenderTarget& rt, float scale, float camX, float camY,
+	float offsetX, float offsetY)
+{
+	if (!MindMapActived || MindMapNodes.empty()) return;
+
+	// 世界坐标 -> 导出画布坐标
+	// 调用方保证 camX = camY = 0，offsetX = offsetY = pad
+	auto EX = [&](int x) { return (float)(x * scale + camX + offsetX); };
+	auto EY = [&](int y) { return (float)(y * scale + camY + offsetY); };
+
+	int gap = MindMapLineGap();
+	int lw = max(1, (int)(max(2, WindowSize.y / 260) * scale));
+
+	// ① 父子连接线：从「延展底线末端」出发
+	XGraph::LineShape::SetLineWidth((float)lw);
+	for (auto& n : MindMapNodes)
+	{
+		float extendedLineW = n.lineEase.value + (float)MindMapBtnZoneW();
+		float px = EX(n.x + (int)extendedLineW);
+		float py = EY(n.y + n.lineH + gap);
+
+		for (int c : n.children)
+		{
+			int ci = MindMapIndexOf(c);
+			if (ci < 0) continue;
+
+			auto& child = MindMapNodes[ci];
+			float cx = EX(child.x);
+			float cy = EY(child.y + child.lineH + gap);
+
+			Color lc = n.color;
+			lc.a = 255;
+			XGraph::SetColor(lc);
+
+			int detachC = max(1, (int)(MindMapLinkDetach() * scale));
+
+			bool straightLine = (n.children.size() == 1) ||
+				(abs((int)(cy - py)) <= max(2, (int)(4 * scale)));
+
+			if (straightLine)
+			{
+				XGraph::LineShape::Line(px, py, cx, (float)(cy - detachC), rt);
+				continue;
+			}
+
+			float hSpan = (float)abs((int)(cx - px));
+			float ctrl = hSpan * 0.55f;
+			if (ctrl < 1.0f) ctrl = 1.0f;
+
+			float y3 = cy - detachC;
+			float c1x = px + ctrl, c1y = py + (y3 - py) * 0.2f;
+			float c2x = cx - ctrl, c2y = y3 - (y3 - py) * 0.2f;
+
+			auto CubicAt = [](float p0, float p1, float p2, float p3, float t)
+				{
+					float mt = 1.0f - t;
+					return mt * mt * mt * p0
+						+ 3.0f * mt * mt * t * p1
+						+ 3.0f * mt * t * t * p2
+						+ t * t * t * p3;
+				};
+
+			const int SEG = 32;
+			float lastX = px, lastY = py;
+			for (int s = 1; s <= SEG; ++s)
+			{
+				float t = (float)s / SEG;
+				float nx = CubicAt(px, c1x, c2x, cx, t);
+				float ny = CubicAt(py, c1y, c2y, y3, t);
+				XGraph::LineShape::Line(lastX, lastY, nx, ny, rt);
+				lastX = nx; lastY = ny;
+			}
+		}
+	}
+
+	// ② 节点底线：延展到按钮区右缘，不画任何按钮
+	for (auto& n : MindMapNodes)
+	{
+		float extendedLineW = n.lineEase.value + (float)MindMapBtnZoneW();
+		float lineY = EY(n.y + n.lineH + gap);
+		float x1 = EX(n.x);
+		float x2 = EX(n.x + (int)extendedLineW);
+
+		XGraph::SetColor(n.color);
+		XGraph::LineShape::SetLineWidth((float)lw);
+		XGraph::LineShape::Line(x1, lineY, x2, lineY, rt);
+	}
+}
+
+// 判断某页是否存在需要导出的实际内容（笔画或图片）
 static bool PageHasContent(const PageDataS& pd)
 {
 	if (!pd.Images.empty()) return true;
-
 	for (size_t i = 0; i < pd.Data.size(); ++i)
 	{
 		if (!pd.Data[i].empty()) return true;
 	}
-
 	return false;
 }
 
-//把指定板书页完整渲染到纹理：背景填充 Color(30,30,30)，依次绘制图片层与笔画层。
-//与旧实现不同，这里不再以窗口为画布，而是取"该页全部内容的世界坐标包围盒"作为渲染范围，
-//因此无论页面被移动到何处（即使已移出视口被裁掉），都会连同四周留白一起完整画入。
-//pd 为页面数据；rt 为目标纹理，调用方需保证其尺寸与窗口一致。
-static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt)
+// 把指定板书页完整渲染到纹理
+static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt, bool drawMindMap = false)
 {
-	// 背景统一为深灰，保证导出 PNG 不透明且与软件画布观感一致
 	rt.clear(Color(30, 30, 30));
 
 	float scale = pd.Scale / 100.0f;
 	if (scale <= 0) scale = 1.0f;
 
-	// 世界坐标 -> 导出画布坐标的偏移：内容包围盒左上角对齐到留白处，
-	// 减去 CameraPos 让导出结果与用户当前看到的相对位置保持一致。
-	const float pad = 40.f * ScreenScale;   // 四周预留空隙（按屏幕缩放自适应）
+	// 导出专用缩放
+	float exportScale = scale * EXPORT_RES_SCALE;
+	const float pad = 40.f * ScreenScale * EXPORT_RES_SCALE;
 
-	// 先计算所有内容在世界坐标下的包围盒（含线宽外扩），保证被裁掉的部分也被纳入
+	// 计算内容包围盒（世界坐标）
 	float minX = FLT_MAX, minY = FLT_MAX;
 	float maxX = -FLT_MAX, maxY = -FLT_MAX;
 
 	auto expandByStroke = [&](float x, float y, float x2, float y2, float w)
-	{
-		float halfW = max(w, 1.f) * 1.5f;
-		minX = min(minX, min(x, x2) - halfW);
-		maxX = max(maxX, max(x, x2) + halfW);
-		minY = min(minY, min(y, y2) - halfW);
-		maxY = max(maxY, max(y, y2) + halfW);
-	};
+		{
+			float halfW = max(w, 1.f) * 1.5f;
+			minX = min(minX, min(x, x2) - halfW);
+			maxX = max(maxX, max(x, x2) + halfW);
+			minY = min(minY, min(y, y2) - halfW);
+			maxY = max(maxY, max(y, y2) + halfW);
+		};
 
 	for (size_t i = 0; i < pd.Data.size(); ++i)
 	{
@@ -2801,8 +4707,6 @@ static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt)
 	{
 		const ImageStruct& img = pd.Images[i];
 		if (img.w <= 0 || img.h <= 0) continue;
-
-		// 图片以中心定位，旋转时用对角线做保守外扩，避免旋转后被切角
 		float diag = (float)std::hypot((double)img.w, (double)img.h) * 0.5f;
 		minX = min(minX, img.pos.x - diag);
 		maxX = max(maxX, img.pos.x + diag);
@@ -2810,7 +4714,22 @@ static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt)
 		maxY = max(maxY, img.pos.y + diag);
 	}
 
-	// 空页兜底：没有内容时退化为对当前视图渲染一块背景
+	if (drawMindMap && MindMapActived && !MindMapNodes.empty())
+	{
+		int mmGap = MindMapLineGap();
+		for (auto& n : MindMapNodes)
+		{
+			float l = (float)n.x;
+			float r = (float)(n.x + (int)n.lineEase.value + MindMapBtnZoneW());
+			float t = (float)(n.y - n.lineH / 2);
+			float b = (float)(n.y + n.lineH + mmGap);
+			minX = min(minX, l);
+			maxX = max(maxX, r);
+			minY = min(minY, t);
+			maxY = max(maxY, b);
+		}
+	}
+
 	if (minX > maxX || minY > maxY)
 	{
 		minX = minY = 0.f;
@@ -2818,53 +4737,38 @@ static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt)
 		maxY = WindowSize.y / scale;
 	}
 
-	// 世界坐标由 CameraPos 平移、scale 缩放映射到屏幕；这里直接沿用同一变换，
-	// 再把包围盒左上角对齐到 (pad, pad)。
-	float camScaleX = pd.CameraPos.x * scale;
-	float camScaleY = pd.CameraPos.y * scale;
+	// 世界坐标 -> 导出画布坐标（不含 CameraPos，避免内容偏移错位）
+	auto W2E_X = [&](float x) { return x * exportScale + pad; };
+	auto W2E_Y = [&](float y) { return y * exportScale + pad; };
 
-	float originX = minX * scale + camScaleX;   // 内容左上角在旧坐标系中的位置
-	float originY = minY * scale + camScaleY;
-
-	// offset 使"内容左上角"最终落在 (pad, pad) 处
-	float offsetX = pad - originX;
-	float offsetY = pad - originY;
-
-	// 先绘制图片层，图片置底、笔画覆盖其上（与画布层叠顺序一致）
+	// 图片层
 	for (size_t i = 0; i < pd.Images.size(); i++)
 	{
 		const ImageStruct& img = pd.Images[i];
-
-		float sx = img.pos.x * scale + camScaleX + offsetX;
-		float sy = img.pos.y * scale + camScaleY + offsetY;
-		float sw = img.w * scale;
-		float sh = img.h * scale;
-
-		// 图片尺寸保护：宽度或高度非正时 PutRoteScaleImage 会产生非法缩放
+		float sx = W2E_X(img.pos.x);
+		float sy = W2E_Y(img.pos.y);
+		float sw = img.w * exportScale;
+		float sh = img.h * exportScale;
 		if (sw <= 0 || sh <= 0 || img.img.w <= 0 || img.img.h <= 0) continue;
-
 		float ScaleX = sw / (float)img.img.w;
 		float ScaleY = sh / (float)img.img.h;
-
-		// Copy 版本的 Image 结构含 texture，旋转中心取 0.5,0.5 与画布绘制保持一致
 		XImage::PutRoteScaleImage(
 			const_cast<IMAGE&>(img.img), sx, sy, (float)img.rote,
 			ScaleX, ScaleY, rt, 0.5, 0.5);
 	}
 
-	// 再绘制该页所有笔画
+	// 笔画层
 	for (size_t i = 0; i < pd.Data.size(); ++i)
 	{
 		for (size_t k = 0; k < pd.Data[i].size(); ++k)
 		{
 			const WriteData& data = pd.Data[i][k];
+			float sx1 = W2E_X(data.x);
+			float sy1 = W2E_Y(data.y);
+			float sx2 = W2E_X(data.x2);
+			float sy2 = W2E_Y(data.y2);
 
-			float sx1 = data.x * scale + camScaleX + offsetX;
-			float sy1 = data.y * scale + camScaleY + offsetY;
-			float sx2 = data.x2 * scale + camScaleX + offsetX;
-			float sy2 = data.y2 * scale + camScaleY + offsetY;
-
-			XGraph::LineShape::SetLineWidth(data.w * scale);
+			XGraph::LineShape::SetLineWidth(data.w * exportScale);
 			if (data.StartX < 0 && data.StartY < 0)
 			{
 				XGraph::SetColor(data.color);
@@ -2872,49 +4776,49 @@ static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt)
 			}
 			else
 			{
-				float ssx1 = data.StartX * scale + camScaleX + offsetX;
-				float ssy1 = data.StartY * scale + camScaleY + offsetY;
+				float ssx1 = W2E_X(data.StartX);
+				float ssy1 = W2E_Y(data.StartY);
 				DrawFilledPolygon({ {(int)ssx1,(int)ssy1},{(int)sx1,(int)sy1},{(int)sx2,(int)sy2} }, data.color, rt);
 			}
 		}
 	}
 
+	// 叠加思维导图
+	if (drawMindMap)
+		MindMapDrawToExport(rt, exportScale, 0.f, 0.f, pad, pad);
+
 	rt.display();
 }
 
-//把当前有内容的板书页导出为图片文件（每页一张）。
-//dir 为目标文件夹（必须已存在），ext 为扩展名（形如 "png"，不含点）。
-//每页按数字命名：1.png、2.png …… 序号与"实际导出的页"连续对应。
-//只有存在实际内容（笔画或图片）的页才会被导出，空占位页会被跳过。
-//普通板书页与展台专用页都会被导出，且包含图片与四周留白。
-//返回成功导出的页数。
+// 把当前有内容的板书页导出为图片文件
 static int SaveAsImage(const wstring& dir, const wstring& ext)
 {
-	// 导出纹理尺寸跟随窗口，保证导出清晰度与原板书一致
-	sf::Vector2u rtSize(
-		static_cast<unsigned int>(WindowSize.x),
-		static_cast<unsigned int>(WindowSize.y));
-	RenderTexture rt(rtSize);
+	// 导出纹理尺寸 = 窗口尺寸 × 分辨率倍率
+	unsigned int rtW = static_cast<unsigned int>(WindowSize.x * EXPORT_RES_SCALE);
+	unsigned int rtH = static_cast<unsigned int>(WindowSize.y * EXPORT_RES_SCALE);
+	RenderTexture rt(sf::Vector2u(rtW, rtH));
 
-	// 汇总需要导出的页面：普通板书页 + 展台专用页。
-	// 关键：跳过没有任何内容的页，避免把"根本不存在的第 2 页"也导出。
-	vector< const PageDataS* > pages;
+	vector<const PageDataS*> pages;
+	vector<bool> pageIsCurrent;
+
 	for (size_t i = 0; i < PageData.size(); i++)
-		if (PageHasContent(PageData[i])) pages.push_back(&PageData[i]);
+	{
+		if (!PageHasContent(PageData[i])) continue;
+		pages.push_back(&PageData[i]);
+		pageIsCurrent.push_back(!WriteCamera::EnableWriteCamera && (int)i == Write::Page);
+	}
 	for (size_t i = 0; i < CameraPageData.size(); i++)
-		if (PageHasContent(CameraPageData[i])) pages.push_back(&CameraPageData[i]);
+	{
+		if (!PageHasContent(CameraPageData[i])) continue;
+		pages.push_back(&CameraPageData[i]);
+		pageIsCurrent.push_back(WriteCamera::EnableWriteCamera && (int)i == Write::Page);
+	}
 
 	int saved = 0;
-
 	for (size_t i = 0; i < pages.size(); i++)
 	{
-		// 直接渲染该页（含图片层与背景色），渲染范围取内容包围盒，自动保留被裁掉的部分与四周留白
-		RenderPageToTexture(*pages[i], rt);
-
-		// 按数字命名，序号跟随实际导出顺序连续递增
+		RenderPageToTexture(*pages[i], rt, pageIsCurrent[i]);
 		wstring outPath = dir + L"\\" + to_wstring(i + 1) + L"." + ext;
-
-		// copyToImage 会把 RenderTexture 的 Y 翻转摆正，避免导出图片上下颠倒
 		sf::Image img = rt.getTexture().copyToImage();
 		if (img.saveToFile(outPath))
 			saved++;
@@ -2928,19 +4832,13 @@ void WriteFile::Save(wstring path, std::wstring ExtName)
 	wstring extLower = ExtName;
 	for (auto& ch : extLower) ch = (wchar_t)towlower(ch);
 
-	// 先按 path 创建同名文件夹，所有导出内容统一放入该文件夹内，
-	// 避免同一次保存产生的多个文件散落在桌面或其它目录中。
-	// 若目录已存在则 CreateDirectory 返回 false，此处不做失败处理，直接复用已有目录。
 	XFile::CreateDirectory(path);
 
-	// 取原 path 最后一段作为板书文件名：调用方传入的 path 是完整路径，
-	// 例如 "C:\Users\xx\Desktop\板书20247123"，末段即 "板书20247123"。
 	size_t slashPos = path.find_last_of(L"\\/");
 	wstring fileName = (slashPos == wstring::npos) ? path : path.substr(slashPos + 1);
 
 	if (extLower != L"mwf")
 	{
-		// 图片统一按数字命名写入 path 文件夹：1.png、2.png 
 		int saved = SaveAsImage(path, extLower);
 
 		if (saved > 0)
@@ -2948,8 +4846,7 @@ void WriteFile::Save(wstring path, std::wstring ExtName)
 			if (1 == Message::ShowMessage("已导出图片", "保存成功", ICOTYPE_SUCCESS, { "确定","打开文件夹" }, 1, L"MiuBarrd"))
 			{
 				ShellExecuteW(nullptr, L"open", L"explorer.exe",
-					path.c_str(),
-					nullptr, SW_SHOWNORMAL);
+					path.c_str(), nullptr, SW_SHOWNORMAL);
 			}
 			XWindow::SetBackGroundColor(Color(30, 30, 30));
 		}
@@ -2961,7 +4858,6 @@ void WriteFile::Save(wstring path, std::wstring ExtName)
 		return;
 	}
 
-	// 板书文件写入 path 文件夹内，文件名沿用原 path 末段 + .mwf
 	ofstream save(path + L"\\" + fileName + L".mwf");
 	if (!save.is_open())
 	{
@@ -2998,8 +4894,7 @@ void WriteFile::Save(wstring path, std::wstring ExtName)
 	if (1 == Message::ShowMessage("已导出图片", "保存成功", ICOTYPE_SUCCESS, { "确定","打开文件夹" }, 1, L"MiuBarrd"))
 	{
 		ShellExecuteW(nullptr, L"open", L"explorer.exe",
-			path.c_str(),
-			nullptr, SW_SHOWNORMAL);
+			path.c_str(), nullptr, SW_SHOWNORMAL);
 	}
 	XWindow::SetBackGroundColor(Color(30, 30, 30));
 }
@@ -3016,7 +4911,7 @@ void WriteFile::Load(wstring path)
 
 	if (PageData.empty()) return;
 
-	if(!PageData[0].Data.empty())
+	if (!PageData[0].Data.empty())
 	{
 		int r = Message::ShowMessage("是否丢弃之前的板书?", "导入文件", ICOTYPE_QUESTION, { "丢弃", "保存" }, 1, L"MiuBarrd");
 		if (r == 1)
@@ -3036,9 +4931,6 @@ void WriteFile::Load(wstring path)
 	PageData.clear();
 
 	string line;
-
-	// 用下标而非指针记录当前页：push_back 触发 vector 扩容时，
-	// 之前取到的 &PageData.back() 会立刻变为悬垂指针，后续写入即访问冲突。
 	int curPageIndex = -1;
 
 	while (getline(file, line))
@@ -3051,11 +4943,8 @@ void WriteFile::Load(wstring path)
 		}
 		else if (line.find("Stroke======") == 0)
 		{
-			// 尚未遇到 "Page======" 时出现 Stroke 行属于脏数据，直接跳过
 			if (curPageIndex < 0 || curPageIndex >= (int)PageData.size()) continue;
 
-			// 先完整解析成临时对象，解析成功后才写入，避免"先 push 再回滚"，
-			// 既不会误删上一条有效数据，也不会在失败时改动页面结构。
 			WriteData d;
 			istringstream iss(line.substr(12));
 
@@ -3065,39 +4954,29 @@ void WriteFile::Load(wstring path)
 				>> ir >> ig >> ib >> ia
 				>> d.Light >> d.TempLayer >> d.w))
 			{
-				continue; // 解析失败直接丢弃，不影响已有数据
+				continue;
 			}
 
 			d.color = Color(ir, ig, ib, ia);
-
-			// 每解析一条有效的 Stroke 行就是一个独立的笔画块：
-			// 若沿用已存在的块直接追加，会把同一行的多点拼到一起，
-			// 这里按行新建块，保证与保存时的层级（Page > Block > 点）一致。
 			PageData[curPageIndex].Data.push_back(vector<WriteData>());
 			PageData[curPageIndex].Data.back().push_back(d);
 		}
-		// 图片相关逻辑已彻底移除
 	}
 
-	// 清理空页：同时剔除完全没有笔画的页，避免留下空壳页参与后续渲染
 	PageData.erase(
 		remove_if(PageData.begin(), PageData.end(),
 			[](const PageDataS& p)
 			{
 				if (p.Data.empty()) return true;
-				// 块存在但内部无点，同样视为空页
 				for (size_t i = 0; i < p.Data.size(); ++i)
 					if (!p.Data[i].empty()) return false;
 				return true;
 			}),
 		PageData.end());
 
-	// 兜底：至少保留一页，保证后续 Page 索引始终合法
 	if (PageData.empty())
 		PageData.push_back(PageDataS());
 
-	// 重新同步页码状态：清空/重建后 TotalPage、Page 必须落在合法范围内，
-	// 否则后续 GetCurPage() 会以越界下标访问 PageData 造成访问冲突。
 	Write::TotalPage = (int)PageData.size();
 	if (Write::Page < 0) Write::Page = 0;
 	if (Write::Page > Write::TotalPage - 1) Write::Page = Write::TotalPage - 1;
@@ -3109,7 +4988,6 @@ void WriteFile::Load(wstring path)
 }
 
 #pragma endregion
-
 
 //展台
 #pragma region MyRegion
@@ -3320,3 +5198,5 @@ int WriteCamera::GetRote(int page)
 }
 
 #pragma endregion
+
+

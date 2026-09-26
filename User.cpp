@@ -5,7 +5,6 @@
 NOSTD; NOXS;
 
 Color User::MainColor = Color(180, 200, 255);
-int User::AA = 4;
 bool User::EnableFixShape = true;
 bool User::EnableWriteAdjust = true;
 
@@ -26,10 +25,6 @@ void User::Read()
 
 				UserLoad >> r >> g >> b;
 				MainColor = Color(r, g, b);
-			}
-			if (temp == "{FXAA}")
-			{
-				UserLoad >> AA;
 			}
 			if (temp == "{FIXLINE}")
 			{
@@ -59,7 +54,6 @@ void User::Save()
 	if (!UserSave.is_open()) return;
 
 	UserSave << "{MainColor} " << to_string(MainColor.r) << " " << to_string(MainColor.g) << " " << to_string(MainColor.b) << endl
-		<< "{FXAA} " << to_string(AA) << endl
 		<< "{FIXLINE} " << to_string(EnableFixShape ? 1 : 0) << endl
 		<< "{ADJUST} " << to_string(EnableWriteAdjust ? 1 : 0) << endl;
 

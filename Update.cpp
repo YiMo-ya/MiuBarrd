@@ -164,7 +164,6 @@ int ChangeInt(int v, int speed, int Min, int Max)
 	return vv;
 }
 
-
 void Hello(RenWin& window)
 {
 	bool isExit = false;
@@ -444,12 +443,12 @@ bool Update::CheckUpdate(RenWin& window)
 
 			RightMessage::ShowMessage(L"MiuBarrd已成功更新至" + XString::Convert::utf8_to_wstring(VER), L"更新完成", RightMessageType_SUCCESS, true);
 
-			ofstream Up("Update.ini");
+			/*ofstream Up("Update.ini");
 			if (Up.is_open())
 			{
 				Up << VER;
 				Up.close();
-			}
+			}*/
 
 			return true;
 		}
@@ -462,12 +461,12 @@ bool Update::CheckUpdate(RenWin& window)
 
 		RightMessage::ShowMessage(L"MiuBarrd已成功更新至" + XString::Convert::utf8_to_wstring(VER), L"更新完成", RightMessageType_SUCCESS, true);
 
-		ofstream Up("Update.ini");
+		/*ofstream Up("Update.ini");
 		if (Up.is_open())
 		{
 			Up << VER;
 			Up.close();
-		}
+		}*/
 
 		return false;
 	}
