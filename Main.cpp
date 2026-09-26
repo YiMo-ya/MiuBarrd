@@ -64,7 +64,7 @@ void StartAnimation(int PosStartX,int PosStartY,int SizeStartX,int SizeStartY, R
 	L"\\(‘ . ’ )\\",
 	L"(‘ w ’)",
 	L"^ _ ^",
-	L"Ciallo-(< ' ω< )-/",
+	L"Ciallo-(< ' w < )-/",
 	L"(-'。')-"
 	};
 

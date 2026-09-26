@@ -2,7 +2,9 @@
 #include "Shared.h"
 #include "User.h"
 #include "RightMessage.h"
+#include "Video.h"
 #include <random>
+#include <thread>
 
 NOXS; NOSTD;
 
@@ -164,16 +166,15 @@ int ChangeInt(int v, int speed, int Min, int Max)
 	return vv;
 }
 
-void Hello(RenWin& window)
+//绘制问好文字
+void DrawHelloText(RenWin& window,bool& isExit)
 {
-	bool isExit = false;
-	int backAlpha = 0;
 
-	int frame = 999;
-	int totalframe = 0;
-	int SleepFrame = 0;
+	static int frame = 999;
+	static int totalframe = 0;
+	static int SleepFrame = 0;
 
-	const string TextList[13] = {
+	static const string TextList[13] = {
 		"AI赋能，高效板书。",
 		"快速，便捷，轻量，极致",
 		"Hello，MiuBarrd " + VER + " 。",
@@ -188,67 +189,186 @@ void Hello(RenWin& window)
 		"适在AI，MiuBarrd已就绪",
 		"潮平连旧渡，星动识归人。"
 	};
+	static Color TextColorNow = Color::Black;
 
-	//初始化背景
-	IMAGE Back[3];
+	static vector < Color> ColorNow;
 
-	for (int i = 0; i < 3; i++)
+	static string text;
+	static int textnum;
+
+	static bool init = false;
+	if(!init)
 	{
-		XImage::NewImage(Back[i], ImgPath + L"Update\\" + to_wstring(i) + L".dll");
+		static int ColorNum = 4;
+		ColorNow.clear();
+		for (int i = 0; i < ColorNum; i++)
+		{
+			Color candidate = XColor::LightColor(User::MainColor, RandomInt(0, 3) / 4.0);
+
+			ColorNow.push_back(candidate);
+		}
+
+		textnum = RandomInt(0, 12);
+		text = TextList[textnum];
+		frame = 0;
+		totalframe = PutTextSay::Utf8Split(text).size() * 8;
+
+		init = true;
 	}
 
-	struct BackA
+	if (frame > totalframe && !down) // 展开动画结束，准备进入收回动画
 	{
-		int x, y;
-		int tag;
-		int size;
-		int frame;
-		int totalframe;
-		Color color;
-	};
+		SleepFrame = 15; // 展示停留时间
+		down = true;
+	}
+	else if (frame < 0 && down) // 收回动画结束，准备进入下一轮
+	{
+		if (!isExit)
+		{
+			SleepFrame = 0; // 收回后停留时间
+			down = false;
 
-	Color TextColorNow = Color::Black;
+			// 切换新内容
+			int ColorNum = 4;
+			ColorNow.clear();
+			while (ColorNow.size() < ColorNum) {
+				Color candidate = XColor::LightColor(User::MainColor, RandomInt(0, 3) / 10.0);
+				bool exists = false;
+				for (const auto& c : ColorNow) {
+					if (c == candidate) {
+						exists = true;
+						break;
+					}
+				}
+				if (!exists) {
+					ColorNow.push_back(candidate);
+				}
+			}
+			int temp = -1;
 
+			while (1)
+			{
+				temp = RandomInt(0, 12);
+				if (textnum != temp) break;
+			}
+
+			text = TextList[temp];
+			textnum = temp;
+
+			frame = 0;
+			totalframe = PutTextSay::Utf8Split(text).size() * 8;
+		}
+	}
+	else if (SleepFrame > 0)
+	{
+		SleepFrame--;
+	}
+	else
+	{
+		// 动画进行中
+		if (!down)
+		{
+			if (frame <= totalframe)
+				frame++;
+		}
+		else
+		{
+			if (frame >= 0)
+				frame -= 2; // 回收速度加快
+		}
+	}
+
+
+	PutTextSay::Draw(
+		WindowSize.x / 2,
+		WindowSize.y / 2,
+		text, { ColorNow }, frame, totalframe, 40, ScreenSize.x / 40, window);
+
+	if(isExit) SleepFrame = 0;
+}
+
+vector<IMAGE> video;
+
+
+
+
+//背景视频
+#pragma region MyRegion
+
+bool LoadVideoFinish = false;
+int VideoBackAlpha = 0;
+void PerLoad()
+{
+	VideoLoader::LoadVideo(video, filesystem::current_path().wstring() + L"\\Update.dll");
+	LoadVideoFinish = true;
+	VideoBackAlpha = 255;
+}
+
+const int PLAY_VIDEO_FRAME_SLEEP = 3;
+//绘制视频
+void DrawVideo(RenWin& window)
+{
+	if (!LoadVideoFinish) return;
+
+	static EV Scale;
+	static bool init = false;
+	if (!init)
+	{
+		Scale.SetAnimationStartValue(100);
+		Scale.SetAnimation(115, 240);
+
+		init = true;
+	}
+
+	static int index = 0;
+
+	static int sleep = PLAY_VIDEO_FRAME_SLEEP;
+
+	if (video.empty()) return;
+
+	static float WScale = WindowSize.x / (float)video[0].w, HScale = WindowSize.y / (float)video[0].h;
+
+	Scale.UpdateAnimation(XEase::EaseBasic::easeOut, 5);
+
+	static int x = WindowSize.x / 2, y = WindowSize.y / 2;
+	XImage::PutScaleImage(video[index], x,y, WScale * Scale.value / 100.0, HScale * Scale.value / 100.0, window,0.5,0.5);
+
+	if (sleep == 0)
+	{
+		index += 1;
+		if (index > video.size() - 1) index = 0;
+
+		sleep = PLAY_VIDEO_FRAME_SLEEP;
+	}
+	else
+	{
+		sleep -= 1;
+	}
+
+	if (VideoBackAlpha > 0)
+	{
+		VideoBackAlpha = ChangeInt(VideoBackAlpha, -3, 0, 255);
+		XGraph::SetFillColor(Color(30, 30, 30, VideoBackAlpha));
+		XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
+	}
+}
+
+#pragma endregion
+
+
+void Hello(RenWin& window)
+{
+	bool isExit = false;
+	int backAlpha = 0;
+	
 	window.requestFocus();
 
-	vector < Color> ColorNow;
-	BackA BackNow[15];
-
-	for (int i = 0; i < 15; i++)
-	{
-		BackNow[i].totalframe = RandomInt(600, 1500);
-		BackNow[i].frame = RandomInt(0, BackNow[i].totalframe);
-		BackNow[i].tag = RandomInt(0, 2);
-
-		float C = RandomInt(-7, 7) / 20.0;
-		if (C > 0) BackNow[i].color = XColor::LightColor(User::MainColor, C);
-		else BackNow[i].color = XColor::DarkColor(User::MainColor, -C);
-
-		BackNow[i].x = RandomInt(ScreenSize.x / 5, ScreenSize.x * 4 / 5);
-		BackNow[i].y = RandomInt(-ScreenSize.y / 5, ScreenSize.y * 4 / 5);
-		BackNow[i].size = RandomInt(100, ScreenSize.x / 5);
-	}
-
-	string text;
-	int textnum;
-
-	int ColorNum = 4;
-	ColorNow.clear();
-	for (int i = 0; i < ColorNum; i++)
-	{
-		Color candidate = XColor::LightColor(User::MainColor, RandomInt(0, 3) / 4.0);
-
-		ColorNow.push_back(candidate);
-	}
+	thread LoadVideo(PerLoad);
+	LoadVideo.detach();
 
 	backAlpha = 255;
 
-	textnum = RandomInt(0, 12);
-	text = TextList[textnum];
-	frame = 0;
-	totalframe = PutTextSay::Utf8Split(text).size() * 8;
-
-	XWindow::SetBackGroundColor(Color(30, 35, 50));
+	XWindow::SetBackGroundColor(Color(30, 30, 30));
 
 	while (!XMsg::IsClose(window))
 	{
@@ -263,136 +383,14 @@ void Hello(RenWin& window)
 
 		XWindow::DelayFps(window,60);
 
-		for (int i = 0; i < 15; i++)
-		{
-			if (BackNow[i].frame <= BackNow[i].totalframe)
-			{
-				// 计算当前进度（0~1）
-				float progress = BackNow[i].frame / float(BackNow[i].totalframe);
-				float size = 0.0f;
-
-				// 对称缩放：前半段放大，后半段缩小
-				if (progress < 0.5f) {
-					// 0 ~ 0.5: 0 -> max
-					size = BackNow[i].size * (progress / 0.5f) / 100.0;
-					Back[BackNow[i].tag].color.a = static_cast<int>(255 * (progress / 0.5f)); // 前半段逐渐变亮
-				}
-				else {
-					// 0.5 ~ 1: max -> 0
-					size = BackNow[i].size * ((1.0f - progress) / 0.5f) / 100.0;
-					Back[BackNow[i].tag].color.a = static_cast<int>(255 * ((1.0f - progress) / 0.5f)); // 后半段逐渐变淡
-				}
-
-				// 保证size非负
-				if (size < 0) size = 0;
-
-				// 你可以根据需要调整缩放比例（如/100.0f），这里假设BackNow[i].size为像素单位
-				int a = Back[BackNow[i].tag].color.a;
-				Back[BackNow[i].tag].color = BackNow[i].color;
-				Back[BackNow[i].tag].color.a = a;
-				XImage::PutScaleImage(
-					Back[BackNow[i].tag],
-					BackNow[i].x, BackNow[i].y,
-					size, size, window,
-					0.5f, 0.5f
-				);
-
-				BackNow[i].frame++;
-			}
-			else
-			{
-				// 重新生成参数
-				BackNow[i].frame = 0;
-				BackNow[i].totalframe = RandomInt(600, 1500);
-				BackNow[i].tag = RandomInt(0, 2);
-
-				float C = RandomInt(-7, 7) / 20.0;
-				if (C > 0) BackNow[i].color = XColor::LightColor(User::MainColor, C);
-				else BackNow[i].color = XColor::DarkColor(User::MainColor, -C);
-
-				BackNow[i].x = RandomInt(ScreenSize.x / 5, ScreenSize.x * 4 / 5);
-				BackNow[i].y = RandomInt(-ScreenSize.y / 5, ScreenSize.y * 4 / 5);
-				BackNow[i].size = RandomInt(100, ScreenSize.x / 5);
-			}
-		}
-
-		XGraph::SetFillColor(Color(0, 0, 0, 100));
-		XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y,window);
-
-		int w = WindowSize.x, h = WindowSize.y;
-
 		if (XMsg::MouseMsg::IsMouseDown(MouseLeft))
 		{
 			isExit = true;
 		}
 
-		if (frame > totalframe && !down) // 展开动画结束，准备进入收回动画
-		{
-			SleepFrame = 15; // 展示停留时间
-			down = true;
-		}
-		else if (frame < 0 && down) // 收回动画结束，准备进入下一轮
-		{
-			if (!isExit)
-			{
-				SleepFrame = 0; // 收回后停留时间
-				down = false;
+		DrawVideo(window);
 
-				// 切换新内容
-				int ColorNum = 4;
-				ColorNow.clear();
-				while (ColorNow.size() < ColorNum) {
-					Color candidate = XColor::LightColor(User::MainColor, RandomInt(0, 3) / 10.0);
-					bool exists = false;
-					for (const auto& c : ColorNow) {
-						if (c == candidate) {
-							exists = true;
-							break;
-						}
-					}
-					if (!exists) {
-						ColorNow.push_back(candidate);
-					}
-				}
-				int temp = -1;
-
-				while (1)
-				{
-					temp = RandomInt(0, 12);
-					if (textnum != temp) break;
-				}
-
-				text = TextList[temp];
-				textnum = temp;
-
-				frame = 0;
-				totalframe = PutTextSay::Utf8Split(text).size() * 8;
-			}
-		}
-		else if (SleepFrame > 0)
-		{
-			SleepFrame--;
-		}
-		else
-		{
-			// 动画进行中
-			if (!down)
-			{
-				if (frame <= totalframe)
-					frame++;
-			}
-			else
-			{
-				if (frame >= 0)
-					frame -= 2; // 回收速度加快
-			}
-		}
-
-
-		PutTextSay::Draw(
-			w / 2,
-			h / 2,
-			text, { ColorNow }, frame, totalframe, 40, ScreenSize.x / 40, window);
+		DrawHelloText(window,isExit);
 
 		XText::SetFontColor(User::MainColor);
 		XText::SetFontSize(25 * ScreenScale);
@@ -401,18 +399,17 @@ void Hello(RenWin& window)
 
 		if (isExit)
 		{
-			backAlpha = ChangeInt(backAlpha, 10, 0, 255);
+			backAlpha = ChangeInt(backAlpha, 20, 0, 255);
 			XGraph::SetFillColor(Color(30, 30, 30, backAlpha));
-			XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, w, h, window);
-			SleepFrame = 0;
+			XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
 		}
 		else
 		{
-			backAlpha = ChangeInt(backAlpha, -10, 0, 255);
+			backAlpha = ChangeInt(backAlpha, -3, 0, 255);
 			if (backAlpha > 0)
 			{
 				XGraph::SetFillColor(Color(30, 30, 30, backAlpha));
-				XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, w, h, window);
+				XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
 			}
 		}
 	}

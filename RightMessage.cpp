@@ -118,42 +118,51 @@ void RightMessage::Manage(RenWin& window)
 	}
 }
 
-// 按渲染宽度分割宽字符串，maxWidth 为最大像素宽度
-vector<std::wstring> SplitWStringByWidth(const std::wstring& input, int maxWidth)
+// 按视觉占位长度分割宽字符串，汉字等 CJK 字符计 2，ASCII 计 1
+vector<wstring> SplitWStringByWidth(const wstring& input, int maxLen)
 {
-	std::vector<std::wstring> result;
+	vector<wstring> result;
 	if (input.empty()) return result;
 
-	// 当前行已累积的渲染宽度（像素）
-	int width = 0;
-	std::wstring current;
+	wstring current;
+	int curLen = 0;
 
 	for (wchar_t c : input)
 	{
-		std::wstring ch(1, c);
-
-		// 换行符：强制断开当前行
+		// 换行符：强制断开
 		if (c == L'\n')
 		{
 			result.push_back(current);
 			current.clear();
-			width = 0;
+			curLen = 0;
 			continue;
 		}
 
-		// 用 XText 测量当前字符的真实渲染宽度，避免 ASCII 1 像素 / 非 ASCII 2 像素的粗略估算
-		int cw = XText::GetFontWidth(ch);
+		// CJK 统一表意字符范围：计 2
+		int charLen = 0;
+		if (c >= 0x4E00 && c <= 0x9FFF)       // CJK 基本
+			charLen = 2;
+		else if (c >= 0x3400 && c <= 0x4DBF)  // CJK 扩展 A
+			charLen = 2;
+		else if (c >= 0x20000 && c <= 0x2A6DF)// CJK 扩展 B
+			charLen = 2;
+		else if (c >= 0xFF00 && c <= 0xFFEF)  // 全角 ASCII（FF01~FF5E）
+			charLen = 2;
+		else if (c < 0x80)                     // ASCII
+			charLen = 1;
+		else                                   // 其他（符号、拉丁扩展等）默认 1
+			charLen = 1;
 
-		// 仅当当前行已有内容且再加一个字符会超宽时才断行，避免空行/死循环
-		if (!current.empty() && width + cw > maxWidth)
+		// 超长则断行
+		if (curLen + charLen > maxLen && !current.empty())
 		{
 			result.push_back(current);
 			current.clear();
-			width = 0;
+			curLen = 0;
 		}
 
 		current += c;
-		width += cw;
+		curLen += charLen;
 	}
 
 	if (!current.empty())
@@ -161,7 +170,6 @@ vector<std::wstring> SplitWStringByWidth(const std::wstring& input, int maxWidth
 
 	return result;
 }
-
 
 void RightMessage::ShowMessage(wstring text, wstring title, RightMessageType type,bool important)
 {
@@ -176,7 +184,7 @@ void RightMessage::ShowMessage(wstring text, wstring title, RightMessageType typ
 	EV x;
 	x.SetAnimationStartValue(WindowSize.x);
 	x.SetAnimation(WindowSize.x - BarW - WindowSize.x * 0.01,45);
-	RightMessages.push_back({ x,SplitWStringByWidth(text,BarW / 2),L"注意：" + title,TotalShowTime,IMAGE(),type,important });
+	RightMessages.push_back({ x,SplitWStringByWidth(text,28),L"注意：" + title,TotalShowTime,IMAGE(),type,important });
 
 	auto& msg = RightMessages.back();
 	if (msg.type == RightMessageType_INFO) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Info.dll");

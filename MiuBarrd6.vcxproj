@@ -166,6 +166,7 @@
     <ClCompile Include="Tool.cpp" />
     <ClCompile Include="Update.cpp" />
     <ClCompile Include="User.cpp" />
+    <ClCompile Include="Video.cpp" />
     <ClCompile Include="Write.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -186,6 +187,7 @@
     <ClInclude Include="Tool.h" />
     <ClInclude Include="Update.h" />
     <ClInclude Include="User.h" />
+    <ClInclude Include="Video.h" />
     <ClInclude Include="Write.h" />
   </ItemGroup>
   <ItemGroup>
