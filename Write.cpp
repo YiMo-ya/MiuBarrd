@@ -449,6 +449,7 @@ uniform vec2  uSegs[512];     // 线段端点打包：偶数项=起点，奇数�
 uniform float uHalfW;         // 半线宽（像素）
 uniform int   uCount;         // 有效线段数
 uniform float uAlpha;         // 整体不透明度（荧光笔用）
+uniform float uFeather;       // 额外羽化半径（像素），用于把硬边过渡加宽
 
 // 点到线段的精确距离（含端点夹取），SDF 的核心
 float sdSegment(vec2 p, vec2 a, vec2 b)
@@ -467,16 +468,26 @@ void main()
     vec2 p = gl_TexCoord[0].xy;
 
     float d = 1e9;
+    // 关键性能点：用 dynamic loop 时驱动可能按最大迭代展开，这里保持与 uCount 同步的早退,
+    // 并只对真正需要的线段求距离；配合外层包围盒裁剪，绝大多数像素只跑少量迭代。
     for (int i = 0; i < 256; i++)
     {
         if (i >= uCount) break;
         d = min(d, sdSegment(p, uSegs[i * 2], uSegs[i * 2 + 1]));
     }
 
-    // 有向距离 < 0 表示在笔画内部；用半像素带宽做解析 AA
+    // 有向距离 < 0 表示在笔画内部
     d -= uHalfW;
-    float aa = max(fwidth(d) * 0.5, 1e-4);
+
+    // 解析 AA 带宽：取屏幕空间导数，保证边缘过渡始终约 1 像素宽；
+    // 再叠加 uFeather 让过渡带更宽，从而在放大/高 DPI 下获得更柔和的边缘。
+    // max() 保证高倍缩放下过渡带不会被拉得比像素还细（避免锯齿回归）。
+    float aa = max(fwidth(d) * 0.75, uFeather);
     float alpha = 1.0 - smoothstep(-aa, aa, d);
+
+    // 用三次平滑放大 alpha 的中间调，让内部实心区更饱满、边缘衰减更自然
+    alpha = alpha * alpha * (3.0 - 2.0 * alpha);
+
     if (alpha <= 0.0) discard;
 
     gl_FragColor = vec4(gl_Color.rgb, gl_Color.a * uAlpha * alpha);
@@ -540,6 +551,14 @@ public:
         m_shader.setUniform("uHalfW", halfW);
         m_shader.setUniform("uCount", segCount);
         m_shader.setUniform("uAlpha", alpha);
+        // 羽化半径与线宽挂钩但设下限：细线也能获得约 1px 的柔和过渡，
+        // 粗线不至于被羽化吃掉内部实心区。不随分辨率变化，保证性能恒定。
+        // 注意：不能用 std::min/std::max —— Windows.h 的 min/max 宏会把它展开成
+        // "::(a,b)" 从而编译报错（C2589）；这里用三元表达式规避宏冲突。
+        float feather = halfW * 0.25f;
+        if (feather > 1.5f) feather = 1.5f;
+        if (feather < 0.6f) feather = 0.6f;
+        m_shader.setUniform("uFeather", feather);
 
         // 关键性能点：quad 只覆盖这批线段的包围盒，而不是整块画布。
         // 片元深度与"覆盖面积 × 线段数"成正比，全屏 quad 在 4K 下会让
@@ -2309,20 +2328,20 @@ bool NeedErase(const int& sx1, const int& sy1, const int& sx2, const int& sy2, V
 
 	if(!IsLeaf)
 	{
-		if (sx1 > ErasePos.x - rw / 2 && sy1 > ErasePos.y - rh / 2 && sx1 < ErasePos.x + rw && sy1 < ErasePos.y + rh)
+		if (sx1 > ErasePos.x - rw / 2 && sy1 > ErasePos.y - rh / 2 && sx1 < ErasePos.x + rw / 2 && sy1 < ErasePos.y + rh / 2)
 			return true;
-		if (sx2 > ErasePos.x - rw / 2 && sy2 > ErasePos.y - rh / 2 && sx2 < ErasePos.x + rw && sy2 < ErasePos.y + rh)
+		if (sx2 > ErasePos.x - rw / 2 && sy2 > ErasePos.y - rh / 2 && sx2 < ErasePos.x + rw / 2 && sy2 < ErasePos.y + rh / 2)
 			return true;
 	}
 	else if(ssx1 > -1 && ssy1 > -1)
 	{
-		if (sx1 > ErasePos.x - rw / 2 && sy1 > ErasePos.y - rh / 2 && sx1 < ErasePos.x + rw && sy1 < ErasePos.y + rh)
+		if (sx1 > ErasePos.x - rw / 2 && sy1 > ErasePos.y - rh / 2 && sx1 < ErasePos.x + rw / 2 && sy1 < ErasePos.y + rh / 2)
 			return true;
-		if (sx2 > ErasePos.x - rw / 2 && sy2 > ErasePos.y - rh / 2 && sx2 < ErasePos.x + rw && sy2 < ErasePos.y + rh)
+		if (sx2 > ErasePos.x - rw / 2 && sy2 > ErasePos.y - rh / 2 && sx2 < ErasePos.x + rw / 2 && sy2 < ErasePos.y + rh / 2)
 			return true;
 
-		if (LineHitRect(ssx1, ssy1, sx1, sy1, ErasePos.x, ErasePos.y, rw, rh)) return true;
-		if (LineHitRect(ssx1, ssy1, sx2, sy2, ErasePos.x, ErasePos.y, rw, rh)) return true;
+		if (LineHitRect(ssx1, ssy1, sx1, sy1, ErasePos.x - rw / 2, ErasePos.y - rh / 2, rw, rh)) return true;
+		if (LineHitRect(ssx1, ssy1, sx2, sy2, ErasePos.x - rw / 2, ErasePos.y - rh / 2, rw, rh)) return true;
 	}
 
 	return false;
@@ -2673,11 +2692,11 @@ void DrawNowLayer(RenderTarget& window)
 
 			if(!WriteCamera::EnableWriteCamera)
 			{
-				if (data.w < Tool::PenSize) data.w += 0.4 * scale;
+				if (data.w < Tool::PenSize) data.w += 0.3 * scale;
 			}
 			else
 			{
-				if (data.w < Tool::PenSize / 3) data.w += 0.15 * scale;
+				if (data.w < Tool::PenSize / 3) data.w += 0.1 * scale;
 			}
 				
 		}
@@ -3246,8 +3265,8 @@ void WriteSub(RenWin& window)
 
 			if (PenW > Tool::PenSize / 2 && Tool::PenCap == 0)
 			{				
-				if (!WriteCamera::EnableWriteCamera) PenW -= 0.4 * GetCurPage().Scale / 100.0;
-				else PenW -= 0.2 * GetCurPage().Scale / 100.0;
+				if (!WriteCamera::EnableWriteCamera) PenW -= 0.4 * scale;
+				else PenW -= 0.2 * scale;
 			}
 
 			// 线宽按缩放比例存
@@ -4563,8 +4582,18 @@ void EditImage(int i, RenWin& window)
 //文件管理
 #pragma region MyRegion
 
-// 导出分辨率倍率：2x 保证清晰，可调 3x（文件更大）
-static const float EXPORT_RES_SCALE = 2.0f;
+// 导出目标长边像素：始终输出 4K（3840）级别画布，短边按内容比例自适应。
+// 说明：画布尺寸不再绑定「窗口大小 × 固定倍率」，而是由内容包围盒反推缩放，
+// 因此无论内容多大多小都能完整导出，且移动过的笔迹不会被裁切。
+static const float EXPORT_LONG_SIDE = 3840.0f;
+
+// 导出画布边缘留白（逻辑像素），乘以 ScreenScale 后换算到实际像素
+static const float EXPORT_PADDING = 48.0f;
+
+// 4K 画布下的叠加渲染倍率：以 1.35 倍超采样后再线性降采样，
+// 用「先放大后缩小」的方式平滑边缘，显著削弱 SDF 在 4K 下的残留锯齿；
+// 相比直接对裸露笔迹做 4x 超采样，显存与耗时更可控，兼顾性能。
+static const float EXPORT_AA_SUPERSAMPLE = 1.35f;
 
 // ===== 思维导图导出绘制（无按钮，底线延展替代） =====
 static void MindMapDrawToExport(RenderTarget& rt, float scale, float camX, float camY,
@@ -4629,7 +4658,8 @@ static void MindMapDrawToExport(RenderTarget& rt, float scale, float camX, float
 						+ t * t * t * p3;
 				};
 
-			const int SEG = 32;
+			// 4K 下曲线分段过少会产生可见折角，这里按实际像素长度自适应细分
+			const int SEG = max(32, (int)(hSpan / 12.0f));
 			float lastX = px, lastY = py;
 			for (int s = 1; s <= SEG; ++s)
 			{
@@ -4656,33 +4686,15 @@ static void MindMapDrawToExport(RenderTarget& rt, float scale, float camX, float
 	}
 }
 
-// 判断某页是否存在需要导出的实际内容（笔画或图片）
-static bool PageHasContent(const PageDataS& pd)
+// 计算某一页内容在世界坐标下的包围盒；返回 false 表示该页无任何内容
+// minX/minY/maxX/maxY 为输出参数，单位为世界坐标
+static bool ComputePageBounds(const PageDataS& pd, bool includeMindMap,
+	float& minX, float& minY, float& maxX, float& maxY)
 {
-	if (!pd.Images.empty()) return true;
-	for (size_t i = 0; i < pd.Data.size(); ++i)
-	{
-		if (!pd.Data[i].empty()) return true;
-	}
-	return false;
-}
+	minX = FLT_MAX; minY = FLT_MAX;
+	maxX = -FLT_MAX; maxY = -FLT_MAX;
 
-// 把指定板书页完整渲染到纹理
-static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt, bool drawMindMap = false)
-{
-	rt.clear(Color(30, 30, 30));
-
-	float scale = pd.Scale / 100.0f;
-	if (scale <= 0) scale = 1.0f;
-
-	// 导出专用缩放
-	float exportScale = scale * EXPORT_RES_SCALE;
-	const float pad = 40.f * ScreenScale * EXPORT_RES_SCALE;
-
-	// 计算内容包围盒（世界坐标）
-	float minX = FLT_MAX, minY = FLT_MAX;
-	float maxX = -FLT_MAX, maxY = -FLT_MAX;
-
+	// 笔迹：按线宽外扩，避免边缘被切掉
 	auto expandByStroke = [&](float x, float y, float x2, float y2, float w)
 		{
 			float halfW = max(w, 1.f) * 1.5f;
@@ -4698,11 +4710,13 @@ static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt, bool dra
 		{
 			const WriteData& data = pd.Data[i][k];
 			expandByStroke(data.x, data.y, data.x2, data.y2, data.w);
+			// 三角填充笔迹的第三个顶点同样要纳入包围盒
 			if (!(data.StartX < 0 && data.StartY < 0))
 				expandByStroke(data.StartX, data.StartY, data.StartX, data.StartY, data.w);
 		}
 	}
 
+	// 图片：按对角线外扩（覆盖任意旋转角）
 	for (size_t i = 0; i < pd.Images.size(); i++)
 	{
 		const ImageStruct& img = pd.Images[i];
@@ -4714,7 +4728,8 @@ static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt, bool dra
 		maxY = max(maxY, img.pos.y + diag);
 	}
 
-	if (drawMindMap && MindMapActived && !MindMapNodes.empty())
+	// 思维导图节点
+	if (includeMindMap && MindMapActived && !MindMapNodes.empty())
 	{
 		int mmGap = MindMapLineGap();
 		for (auto& n : MindMapNodes)
@@ -4730,34 +4745,142 @@ static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt, bool dra
 		}
 	}
 
-	if (minX > maxX || minY > maxY)
+	return (minX <= maxX && minY <= maxY);
+}
+
+// 单页导出布局描述：由内容包围盒反推的画布尺寸与缩放关系
+struct ExportLayout
+{
+	unsigned int canvasW = 0;		// 最终输出像素宽
+	unsigned int canvasH = 0;		// 最终输出像素高
+	unsigned int ssW = 0;			// 超采样渲染纹理宽
+	unsigned int ssH = 0;			// 超采样渲染纹理高
+	float scale = 1.0f;				// 世界坐标 -> 最终像素的缩放系数
+	float ssScale = 1.0f;			// 世界坐标 -> 超采样纹理的缩放系数
+	float pad = 0.0f;				// 最终画布上的边距（像素）
+	float ssPad = 0.0f;				// 超采样画布上的边距（像素）
+	float originX = 0.0f;			// 世界坐标原点在最终画布上的 X（像素）
+	float originY = 0.0f;			// 世界坐标原点在最终画布上的 Y（像素）
+};
+
+// 依据内容包围盒计算导出布局：长边固定 4K，短边按比例，四周保留空隙
+static ExportLayout ComputeExportLayout(const PageDataS& pd, bool includeMindMap)
+{
+	ExportLayout out;
+
+	float minX = 0.f, minY = 0.f, maxX = 0.f, maxY = 0.f;
+	bool hasContent = ComputePageBounds(pd, includeMindMap, minX, minY, maxX, maxY);
+	if (!hasContent)
 	{
+		// 无内容时退化为整屏范围，保证仍能输出一张空白 4K 图
 		minX = minY = 0.f;
-		maxX = WindowSize.x / scale;
-		maxY = WindowSize.y / scale;
+		maxX = WindowSize.x;
+		maxY = WindowSize.y;
 	}
 
-	// 世界坐标 -> 导出画布坐标（不含 CameraPos，避免内容偏移错位）
-	auto W2E_X = [&](float x) { return x * exportScale + pad; };
-	auto W2E_Y = [&](float y) { return y * exportScale + pad; };
+	// 内容包围盒尺寸（世界坐标）
+	float contentW = max(1.0f, maxX - minX);
+	float contentH = max(1.0f, maxY - minY);
 
-	// 图片层
+	// 边距：按 DPI 缩放，保证 4K 下仍有明显空隙
+	float padWorld = EXPORT_PADDING * ScreenScale;
+
+	// 内容 + 双边距决定长边，长边固定 EXPORT_LONG_SIDE
+	float paddedW = contentW + padWorld * 2.0f;
+	float paddedH = contentH + padWorld * 2.0f;
+	float longSide = max(paddedW, paddedH);
+	float scale = EXPORT_LONG_SIDE / longSide;
+
+	// 浮点乘加在极端比例下会丢 1 像素，向上取整避免边缘被裁掉
+	unsigned int canvasW = (unsigned int)ceilf(paddedW * scale);
+	unsigned int canvasH = (unsigned int)ceilf(paddedH * scale);
+
+	// RenderTexture 尺寸上限保护，防止超宽画布创建失败
+	const unsigned int MAX_DIM = 16384;
+	if (canvasW > MAX_DIM || canvasH > MAX_DIM)
+	{
+		float shrink = min((float)MAX_DIM / canvasW, (float)MAX_DIM / canvasH);
+		scale *= shrink;
+		canvasW = (unsigned int)ceilf(paddedW * scale);
+		canvasH = (unsigned int)ceilf(paddedH * scale);
+	}
+
+	out.canvasW = max(1u, canvasW);
+	out.canvasH = max(1u, canvasH);
+	out.scale = scale;
+	out.pad = padWorld * scale;
+
+	// 超采样纹理：与最终画布保持同一比例，从而让边距在两级画布上等价
+	out.ssScale = scale * EXPORT_AA_SUPERSAMPLE;
+	out.ssW = max(1u, (unsigned int)ceilf(paddedW * out.ssScale));
+	out.ssH = max(1u, (unsigned int)ceilf(paddedH * out.ssScale));
+	out.ssPad = padWorld * out.ssScale;
+
+	// 世界坐标原点 → 画布像素：先平移 minX/minY 再缩放并加边距
+	out.originX = (0.0f - minX) * scale + out.pad;
+	out.originY = (0.0f - minY) * scale + out.pad;
+	return out;
+}
+
+// 判断某页是否存在需要导出的实际内容（笔画或图片）
+static bool PageHasContent(const PageDataS& pd)
+{
+	if (!pd.Images.empty()) return true;
+	for (size_t i = 0; i < pd.Data.size(); ++i)
+	{
+		if (!pd.Data[i].empty()) return true;
+	}
+	return false;
+}
+
+// 把指定板书页完整渲染到最终输出纹理（尺寸由内容包围盒反推，长边 4K）
+// 返回 false 表示纹理创建失败
+static bool RenderPageToTexture(const PageDataS& pd, bool drawMindMap, Texture& outTex)
+{
+	// 先依据内容计算布局（长边固定 4K，四周留白，短边自适应）
+	ExportLayout layout = ComputeExportLayout(pd, drawMindMap);
+
+	// 页面自身缩放（用户缩放板书内容时生效）
+	float pageScale = pd.Scale / 100.0f;
+	if (pageScale <= 0) pageScale = 1.0f;
+
+	float eScale = layout.ssScale * pageScale;
+	float ePadX = layout.ssPad;	// 超采样画布上与最终画布等价的世界边距
+	float ePadY = layout.ssPad;
+
+	// 世界坐标 -> 超采样画布坐标；先按包围盒左下角对齐（-minX/-minY），
+	// 再加边距，保证所有内容（含移动过的笔迹）完整落在画布内
+	float minX = 0.f, minY = 0.f, maxX = 0.f, maxY = 0.f;
+	if (!ComputePageBounds(pd, drawMindMap, minX, minY, maxX, maxY))
+	{
+		minX = minY = 0.f;
+		maxX = WindowSize.x;
+		maxY = WindowSize.y;
+	}
+	auto W2E_X = [&](float x) { return (x - minX) * eScale + ePadX; };
+	auto W2E_Y = [&](float y) { return (y - minY) * eScale + ePadY; };
+
+	// 超采样纹理：以高于最终画布的分辨率渲染，最后整体降采样获得平滑边缘
+	RenderTexture rt(sf::Vector2u(layout.ssW, layout.ssH));
+	if (!rt.isSmooth())
+		rt.setSmooth(true);
+	rt.clear(Color(30, 30, 30));
+
+	// 图片层：注意旋转图片时按对角线预留，避免旋转后超出包围盒
 	for (size_t i = 0; i < pd.Images.size(); i++)
 	{
 		const ImageStruct& img = pd.Images[i];
-		float sx = W2E_X(img.pos.x);
-		float sy = W2E_Y(img.pos.y);
-		float sw = img.w * exportScale;
-		float sh = img.h * exportScale;
+		float sw = img.w * eScale;
+		float sh = img.h * eScale;
 		if (sw <= 0 || sh <= 0 || img.img.w <= 0 || img.img.h <= 0) continue;
 		float ScaleX = sw / (float)img.img.w;
 		float ScaleY = sh / (float)img.img.h;
 		XImage::PutRoteScaleImage(
-			const_cast<IMAGE&>(img.img), sx, sy, (float)img.rote,
+			const_cast<IMAGE&>(img.img), W2E_X(img.pos.x), W2E_Y(img.pos.y), (float)img.rote,
 			ScaleX, ScaleY, rt, 0.5, 0.5);
 	}
 
-	// 笔画层
+	// 笔画层：线宽同步放大，避免超采样时线条变细
 	for (size_t i = 0; i < pd.Data.size(); ++i)
 	{
 		for (size_t k = 0; k < pd.Data[i].size(); ++k)
@@ -4768,7 +4891,7 @@ static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt, bool dra
 			float sx2 = W2E_X(data.x2);
 			float sy2 = W2E_Y(data.y2);
 
-			XGraph::LineShape::SetLineWidth(data.w * exportScale);
+			XGraph::LineShape::SetLineWidth(data.w * eScale);
 			if (data.StartX < 0 && data.StartY < 0)
 			{
 				XGraph::SetColor(data.color);
@@ -4783,21 +4906,34 @@ static void RenderPageToTexture(const PageDataS& pd, RenderTexture& rt, bool dra
 		}
 	}
 
-	// 叠加思维导图
+	// 叠加思维导图（同样使用超采样坐标，边缘留白与内容一致）
 	if (drawMindMap)
-		MindMapDrawToExport(rt, exportScale, 0.f, 0.f, pad, pad);
+		MindMapDrawToExport(rt, eScale, -minX, -minY, ePadX, ePadY);
 
 	rt.display();
+
+	// 降采样：把超采样纹理缩放到最终像素尺寸，消除残余锯齿
+	RenderTexture finalRt(sf::Vector2u(layout.canvasW, layout.canvasH));
+	finalRt.clear(Color(30, 30, 30));
+	{
+		// 使用平滑采样保证缩放插值，杜绝二次锯齿
+		Texture& srcTex = const_cast<Texture&>(rt.getTexture());
+		srcTex.setSmooth(true);
+		Sprite sp(srcTex);
+		float sx = (float)layout.canvasW / (float)layout.ssW;
+		float sy = (float)layout.canvasH / (float)layout.ssH;
+		sp.setScale(sf::Vector2f(sx, sy));
+		finalRt.draw(sp);
+	}
+	finalRt.display();
+
+	outTex = finalRt.getTexture();
+	return true;
 }
 
 // 把当前有内容的板书页导出为图片文件
 static int SaveAsImage(const wstring& dir, const wstring& ext)
 {
-	// 导出纹理尺寸 = 窗口尺寸 × 分辨率倍率
-	unsigned int rtW = static_cast<unsigned int>(WindowSize.x * EXPORT_RES_SCALE);
-	unsigned int rtH = static_cast<unsigned int>(WindowSize.y * EXPORT_RES_SCALE);
-	RenderTexture rt(sf::Vector2u(rtW, rtH));
-
 	vector<const PageDataS*> pages;
 	vector<bool> pageIsCurrent;
 
@@ -4817,9 +4953,13 @@ static int SaveAsImage(const wstring& dir, const wstring& ext)
 	int saved = 0;
 	for (size_t i = 0; i < pages.size(); i++)
 	{
-		RenderPageToTexture(*pages[i], rt, pageIsCurrent[i]);
+		// 纹理在渲染函数内部按内容尺寸创建，尺寸不再绑定窗口大小
+		Texture tex;
+		if (!RenderPageToTexture(*pages[i], pageIsCurrent[i], tex))
+			continue;
+
 		wstring outPath = dir + L"\\" + to_wstring(i + 1) + L"." + ext;
-		sf::Image img = rt.getTexture().copyToImage();
+		sf::Image img = tex.copyToImage();
 		if (img.saveToFile(outPath))
 			saved++;
 	}
