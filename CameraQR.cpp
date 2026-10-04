@@ -1,187 +1,56 @@
 #pragma once
 #include "CameraQR.h"
+#include "qrcodegen.hpp"
 #include <vector>
 #include <string>
 #include <cstdint>
-#include <cstring>
 
 namespace qr {
 
     // ------------------------------------------------------------
-    // 极简 QR 编码器（Version 6，纠错 M，支持字节模式）
-    // 仅用于 URL / ASCII，不适合长 HTML
+    // 将任意文本编码为标准二维码并渲染成 SFML 纹理。
+    // 采用 Nayuki qrcodegen（ISO/IEC 18004 完整实现）：
+    // 自动选择最小版本、自动评估 8 种掩码、完整绘制定位/时序/对齐/格式图形，
+    // 因此生成的二维码可被任意标准扫码器识别。
     // ------------------------------------------------------------
-    struct QRCode {
-        static constexpr int VERSION = 6;
-        static constexpr int MODULES = 21 + (VERSION - 1) * 4; // 41
-        static constexpr int TOTAL_CODEWORDS = 172;
-        static constexpr int ECC_CODEWORDS = 48; // M level
 
-        uint8_t modules[MODULES][MODULES] = {};
-        uint8_t mask = 0;
-
-        void setModule(int x, int y, bool v) {
-            if (x >= 0 && y >= 0 && x < MODULES && y < MODULES)
-                modules[y][x] = v;
-        }
-
-        bool getModule(int x, int y) const {
-            return modules[y][x];
-        }
-    };// ------------------------------------------------------------
-    // 工具函数
-    // ------------------------------------------------------------
-    static uint8_t galMul(uint8_t a, uint8_t b) {
-        uint8_t p = 0;
-        for (int i = 0; i < 8; ++i) {
-            if (b & 1) p ^= a;
-            bool hiBit = a & 0x80;
-            a <<= 1;
-            if (hiBit) a ^= 0x1D;
-            b >>= 1;
-        }
-        return p;
-    }
-
-    // ------------------------------------------------------------
-    // 生成多项式
-    // ------------------------------------------------------------
-    static void rsGenerateECC(const uint8_t* data, int dataLen,
-        uint8_t* ecc, int eccLen) {
-        std::vector<uint8_t> gen(eccLen + 1, 0);
-        gen[0] = 1;
-        for (int i = 0; i < eccLen; ++i) {
-            uint8_t coeff = 1 << i;
-            for (int j = i + 1; j > 0; --j) {
-                gen[j] = gen[j - 1] ^ galMul(gen[j], coeff);
-            }
-            gen[0] = galMul(gen[0], coeff);
-        }
-
-        std::vector<uint8_t> remainder(dataLen + eccLen, 0);
-        std::memcpy(remainder.data(), data, dataLen);
-
-        for (int i = 0; i < dataLen; ++i) {
-            uint8_t factor = remainder[i];
-            if (factor) {
-                for (int j = 0; j < eccLen + 1; ++j) {
-                    remainder[i + j] ^= galMul(gen[j], factor);
-                }
-            }
-        }
-
-        std::memcpy(ecc, remainder.data() + dataLen, eccLen);
-    }
-
-    // ------------------------------------------------------------
-    // 核心编码（字节模式）
-    // ------------------------------------------------------------
-    static QRCode encode(const std::string& text) {
-        QRCode qr;
-
-        // 模式指示（字节模式）
-        std::vector<uint8_t> bits;
-        auto pushBits = [&](uint32_t val, int len) {
-            for (int i = len - 1; i >= 0; --i)
-                bits.push_back((val >> i) & 1);
-            };
-
-        pushBits(0b0100, 4); // 字节模式
-        pushBits(text.size(), 8);
-
-        for (char c : text) {
-            pushBits(static_cast<uint8_t>(c), 8);
-        }
-
-        // 终止符
-        pushBits(0, 4);
-
-        // 补齐到 8 的倍数
-        while (bits.size() % 8 != 0) bits.push_back(0);
-
-        // 转为字节
-        std::vector<uint8_t> data;
-        for (size_t i = 0; i < bits.size(); i += 8) {
-            uint8_t b = 0;
-            for (int j = 0; j < 8; ++j) b = (b << 1) | bits[i + j];
-            data.push_back(b);
-        }
-
-        // 填充码字
-        static const uint8_t pad[] = { 0xEC, 0x11 };
-        int idx = 0;
-        while (data.size() < QRCode::TOTAL_CODEWORDS - QRCode::ECC_CODEWORDS) {
-            data.push_back(pad[idx++ % 2]);
-        }
-
-        // 生成 ECC
-        uint8_t ecc[QRCode::ECC_CODEWORDS];
-        rsGenerateECC(data.data(), data.size(), ecc, QRCode::ECC_CODEWORDS);
-
-        // 交错
-        std::vector<uint8_t> finalData;
-        for (size_t i = 0; i < data.size(); ++i) finalData.push_back(data[i]);
-        for (int i = 0; i < QRCode::ECC_CODEWORDS; ++i) finalData.push_back(ecc[i]);
-
-        // 放置模块（简化版：只画数据区域，实际 QR 需要位置探测图形）
-        //  这里是简化实现，完整版需要添加：
-        // - 位置探测图形（三个角）
-        // - 时序线
-        // - 格式信息
-        // - 掩码处理
-
-        // 为了让你先跑通，这里用最简化的方式：
-        int x = 0, y = qr.MODULES - 1, dir = -1;
-        for (size_t i = 0; i < finalData.size(); ++i) {
-            for (int bit = 7; bit >= 0; --bit) {
-                qr.setModule(x, y, (finalData[i] >> bit) & 1);
-                y += dir;
-                if (y < 0 || y >= qr.MODULES) {
-                    y -= dir;
-                    x++;
-                    dir = -dir;
-                }
-            }
-        }
-
-        return qr;
-    }
-
-    // ------------------------------------------------------------
-    // 生成 SFML Texture
-    // ------------------------------------------------------------
+    /// <summary>
+    /// 将文本编码为标准二维码并渲染为 SFML 纹理。
+    /// </summary>
+    /// <param name="text">待编码的文本（URL / ASCII，UTF-8 字节序列）。</param>
+    /// <param name="scale">每个模块的像素边长，过小会导致扫码失败，建议不小于 4。</param>
+    /// <param name="border">四周静默区宽度（单位：模块），QR 规范要求至少 4。</param>
+    /// <returns>可直接绘制的二维码纹理。</returns>
     static Texture generateTexture(const std::string& text,
         int scale = 8,
         int border = 4) {
-        QRCode qr = encode(text);
+        // MEDIUM 纠错：投屏 URL 场景下兼顾容量与容错能力
+        const qrcodegen::QrCode code =
+            qrcodegen::QrCode::encodeText(text.c_str(), qrcodegen::QrCode::Ecc::MEDIUM);
 
-        int dim = qr.MODULES + border * 2;
-        int px = dim * scale;
+        const int modules = code.getSize();
+        const int dim = modules + border * 2;   // 含静默区的总模块数
+        const int px = dim * scale;             // 最终像素边长
 
-        std::vector<uint8_t> pixels(px * px * 4, 0);
+        // 初始化为纯白：白色模块与静默区可直接复用该底色，无需再写入
+        std::vector<uint8_t> pixels(static_cast<size_t>(px) * px * 4, 0xFF);
 
-        for (int y = 0; y < dim; ++y) {
-            for (int x = 0; x < dim; ++x) {
-                bool dark =
-                    (x >= border && y >= border &&
-                        x < border + qr.MODULES && y < border + qr.MODULES)
-                    ? qr.getModule(x - border, y - border)
-                    : false;
+        for (int y = 0; y < px; ++y) {
+            for (int x = 0; x < px; ++x) {
+                // 像素坐标换算为模块坐标；border 区域内 mx/my 为负，
+                // 落入此范围的像素保持白色，自然形成静默区
+                const int mx = x / scale - border;
+                const int my = y / scale - border;
+                const bool dark = (mx >= 0 && my >= 0 && mx < modules && my < modules)
+                    && code.getModule(mx, my);
+                if (!dark)
+                    continue;  // 白色已由初始值保证，跳过以省去一次写入
 
-                uint8_t v = dark ? 0x00 : 0xFF;
-
-                int startX = x * scale;
-                int startY = y * scale;
-
-                for (int dy = 0; dy < scale; ++dy) {
-                    for (int dx = 0; dx < scale; ++dx) {
-                        int ix = (startY + dy) * px + (startX + dx);
-                        pixels[ix * 4 + 0] = v;
-                        pixels[ix * 4 + 1] = v;
-                        pixels[ix * 4 + 2] = v;
-                        pixels[ix * 4 + 3] = 255;
-                    }
-                }
+                const int ix = (y * px + x) * 4;
+                pixels[ix + 0] = 0x00;
+                pixels[ix + 1] = 0x00;
+                pixels[ix + 2] = 0x00;
+                pixels[ix + 3] = 0xFF;
             }
         }
 
@@ -191,6 +60,7 @@ namespace qr {
 
         Texture tex;
         tex.loadFromImage(img);
+        // 关闭平滑：插值会模糊模块边界，直接导致扫码器无法识别
         tex.setSmooth(false);
         return tex;
     }

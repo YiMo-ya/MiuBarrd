@@ -8,8 +8,6 @@
 
 NOXS; NOSTD;
 
-string ver;
-
 //更新
 #pragma region MyRegion
 
@@ -290,9 +288,6 @@ void DrawHelloText(RenWin& window,bool& isExit)
 
 vector<IMAGE> UpdateImgs;
 
-
-
-
 //背景视频
 #pragma region MyRegion
 
@@ -334,12 +329,18 @@ void DrawVideo(RenWin& window)
 	if (UpdateImgs.empty()) return;
 
 	static float WScale = WindowSize.x / (float)UpdateImgs[0].w, HScale = WindowSize.y / (float)UpdateImgs[0].h;
+	static int x = WindowSize.x / 2, y = WindowSize.y / 3;
+	static int r = WindowSize.x / 200, lw = WindowSize.x / 500;
 
 	Scale.UpdateAnimation(XEase::EaseBasic::easeOut, 5);
 
-	static int x = WindowSize.x / 2, y = WindowSize.y / 3;
-	XImage::PutScaleImage(UpdateImgs[index], x,y, WScale * Scale.value / 100.0, HScale * Scale.value / 100.0, window,0.5,0.5);
+	XGraph::LineShape::SetLineWidth(lw);
+	XGraph::SetColor(User::MainColor);
+	int w = UpdateImgs[0].w * Scale.value / 96.0, h = UpdateImgs[0].h * Scale.value / 96.0;
+	XGraph::RectangleShape::RoundRect(x - w / 2,y - h / 2,w,h ,r,window);
 
+	UpdateImgs[index].color.a = 255 - PlayAlpha;
+	XImage::PutScaleImage(UpdateImgs[index], x,y, WScale * Scale.value / 100.0, HScale * Scale.value / 100.0, window,0.5,0.5);
 	
 	if (PlayClock < PLAY_FRAME)
 	{
@@ -364,11 +365,79 @@ void DrawVideo(RenWin& window)
 			}
 		}
 	}
+}
 
-	if (PlayAlpha > 0)
+#pragma endregion
+
+//表情包
+#pragma region MyRegion
+
+struct Qs
+{
+	IMAGE img;
+
+	EV Size;
+};
+vector<Qs> Qss;
+
+void DrawQs(RenWin& window)
+{
+	static int Clock = 120;
+	static int index = -1;
+	Clock += 1;
+
+	static bool Init = false;
+	if (!Init)
 	{
-		XGraph::SetFillColor(Color(30, 30, 30, PlayAlpha));
-		XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
+		vector<Path> imgs = XFile::ListFiles(filesystem::current_path().wstring() + L"\\Update\\Animation");
+
+		for (int i = 0; i < imgs.size(); i++)
+		{
+			Qss.emplace_back();
+			XImage::NewImage(Qss[i].img, imgs[i].wstring());
+		}
+
+		Init = true;
+	}
+
+	static int y = WindowSize.y * 3.1 / 4;
+	static int x = WindowSize.x * 0.76;
+
+	if (Clock > 120)
+	{
+		index += 1;
+		if (index > Qss.size() - 1) index = 0;
+
+		if (index < 0) index = 0;
+		Qss[index].Size.SetAnimation(100, 30);
+		if(index == 0) Qss[Qss.size() - 1].Size.SetAnimation(0, 30);
+		else Qss[index - 1].Size.SetAnimation(0, 30);
+
+		Clock = 0;
+	}
+
+	for (int i = 0; i < Qss.size(); i++)
+	{
+		if(i != index)
+		{
+			if (Qss[i].Size.end > 0) Qss[i].Size.UpdateAnimation(XEase::EaseBasic::easeOutBack, 2);
+			else Qss[i].Size.UpdateAnimation(XEase::EaseBasic::easeInBack, 2);
+		}
+		else
+		{
+			int LastIndex = index - 1;
+			if (LastIndex < 0) LastIndex = Qss.size() - 1;
+			if (Qss[LastIndex].Size.frame > 30)
+			{
+				if (Qss[i].Size.end > 0) Qss[i].Size.UpdateAnimation(XEase::EaseBasic::easeOutBack, 2);
+				else Qss[i].Size.UpdateAnimation(XEase::EaseBasic::easeInBack, 2);
+			}
+		}
+
+		static float Scale = WindowSize.x / 10 / 512.0;
+
+		if(Qss[i].Size.value > 0) 
+			XImage::PutScaleImage(Qss[i].img, x, y, Scale * Qss[i].Size.value / 100.0, Scale * Qss[i].Size.value / 100.0, window, 0.5, 0.5);
 	}
 }
 
@@ -388,89 +457,14 @@ void UpdateThread()
 
 	::Sleep(2000);
 
+	Process.SetAnimation(100, 30);
+
 	while (!CanUpdateExit)
 	{
 		::Sleep(10);
 	}
 
-	Process.SetAnimation(100,30);
-}
-
-EV UpdateTextY;
-void Update(RenWin& window)
-{
-	UpdateTextY.SetAnimationStartValue(WindowSize.y * 3 / 4);
-	UpdateTextY.SetAnimation(WindowSize.y * 2.2 / 3, 180);
-
-	Process.SetAnimationStartValue(0);
-
-	thread temp(UpdateThread);
-	temp.detach();
-
-	int backAlpha = 0;
-
-	window.requestFocus();
-
-	backAlpha = 255;
-
-	XWindow::SetBackGroundColor(Color(30, 30, 30));
-
-	bool isExit = false;
-
-	while (!XMsg::IsClose(window))
-	{
-		if (isExit && backAlpha >= 255) break;
-		else if (backAlpha > 0)
-		{
-			backAlpha -= 5;
-		}
-
-		if (window.hasFocus()) XSystem::Taskbar::SetTaskBarVisible(false);
-		else XSystem::Taskbar::SetTaskBarVisible(true);
-
-		XWindow::DelayFps(window, 60);
-
-		DrawVideo(window);
-
-		Process.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
-		UpdateTextY.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
-		XText::SetFontColor(User::MainColor);
-		XText::SetFontSize(35 * ScreenScale);
-		XText::SetFontAdjust(ADJUST_CENTER, ADJUST_TOP);
-		XText::Xyprintf(WindowSize.x / 2, UpdateTextY.value, "正在完成自动更新 - MiuBarrd 1.6.3.0                  已完成" + to_string((int)Process.end) + "%", window);
-
-		//进度条
-		static int y = WindowSize.y * 3.2 / 4;
-		static int x1 = WindowSize.x * 0.2, x2 = WindowSize.x * 0.8;
-		static int l = x2 - x1;
-
-		static int lw = WindowSize.x / 700;
-
-		XGraph::LineShape::SetLineWidth(lw);
-		XGraph::SetColor(Color(100, 100, 100));
-		XGraph::LineShape::Line(x1, y, x2, y, window);
-		XGraph::LineShape::SetLineWidth(lw * 5);
-		XGraph::SetColor(User::MainColor);
-		XGraph::LineShape::Line(x1, y, x1 + l * Process.value / 100.0, y, window);
-
-		if (Process.value >= 100) isExit = true;
-
-		if (isExit)
-		{
-			backAlpha = ChangeInt(backAlpha, 20, 0, 255);
-			XGraph::SetFillColor(Color(30, 30, 30, backAlpha));
-			XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
-		}
-		else
-		{
-			backAlpha = ChangeInt(backAlpha, -3, 0, 255);
-			if (backAlpha > 0)
-			{
-				XGraph::SetFillColor(Color(30, 30, 30, backAlpha));
-				XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
-			}
-		}
-	}
+	Process.SetAnimation(110, 30);
 }
 
 void DrawMicaBackground(
@@ -553,6 +547,116 @@ void DrawMicaBackground(
 	window.draw(fullscreenQuad, states);
 }
 
+EV UpdateTextY;
+void Update(RenWin& window)
+{
+	UpdateTextY.SetAnimationStartValue(WindowSize.y * 3 / 4);
+	UpdateTextY.SetAnimation(WindowSize.y * 2.2 / 3, 180);
+
+	Process.SetAnimationStartValue(0);
+
+	thread temp(UpdateThread);
+	temp.detach();
+
+	int backAlpha = 0;
+
+	window.requestFocus();
+
+	backAlpha = 255;
+
+	XWindow::SetBackGroundColor(Color(30, 30, 30));
+
+	bool isExit = false;
+
+	while (!XMsg::IsClose(window))
+	{
+		if (isExit && backAlpha >= 255) break;
+		else if (backAlpha > 0)
+		{
+			backAlpha -= 5;
+		}
+
+		if (window.hasFocus()) XSystem::Taskbar::SetTaskBarVisible(false);
+		else XSystem::Taskbar::SetTaskBarVisible(true);
+
+		XWindow::DelayFps(window, 60);
+
+		DrawVideo(window);
+
+		Process.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+		UpdateTextY.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+		XText::SetFontColor(User::MainColor);
+		XText::SetFontSize(35 * ScreenScale);
+		XText::SetFontAdjust(ADJUST_LEFT, ADJUST_TOP);
+		if(Process.value < 100) XText::Xyprintf(WindowSize.x * 0.3, UpdateTextY.value, "正在完成自动更新  "+ to_string((int)Process.end) + "%", window);
+		else XText::Xyprintf(WindowSize.x * 0.3, UpdateTextY.value, "正在检查文件依赖性，再等一下下。", window);
+
+		//进度条
+		static int y = WindowSize.y * 3.2 / 4;
+		static int x1 = WindowSize.x * 0.2, x2 = WindowSize.x * 0.7;
+		static int l = x2 - x1;
+		static int lw = WindowSize.x / 700;
+		if(Process.value < 100)
+		{
+			XGraph::LineShape::SetLineWidth(lw);
+			XGraph::SetColor(Color(100, 100, 100));
+			XGraph::LineShape::Line(x1, y, x2, y, window);
+			XGraph::LineShape::SetLineWidth(lw * 5);
+			XGraph::SetColor(User::MainColor);
+			XGraph::LineShape::Line(x1, y, x1 + l * Process.value / 100.0, y, window);
+		}
+		else
+		{
+			static int lg = l * 0.3;
+
+			static bool IsIn = false;
+
+			static EV p;
+			if(!p.IsAnimation())
+			{
+				p.SetAnimationStartValue(-lg);
+				p.SetAnimation(l, 60);
+				IsIn = !IsIn;
+			}
+
+			if (IsIn) p.UpdateAnimation(XEase::EaseBasic::easeInOut, 2);
+			else p.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+
+			int Start1 = p.value; 
+			int Start2 = Start1 + lg;
+			Start2 = max(0, min(x2 - x1, Start2));
+			Start1 = max(0, min(x2 - x1, (int)p.value));
+
+			XGraph::LineShape::SetLineWidth(lw);
+			XGraph::SetColor(Color(100, 100, 100));
+			XGraph::LineShape::Line(x1, y, x2, y, window);
+			XGraph::LineShape::SetLineWidth(lw * 5);
+			XGraph::SetColor(User::MainColor);
+			XGraph::LineShape::Line(x1 + Start1, y,x1 + Start2, y, window);
+		}
+
+		DrawQs(window);
+
+		if (Process.value > 100) isExit = true;
+
+		if (isExit)
+		{
+			backAlpha = ChangeInt(backAlpha, 20, 0, 255);
+			XGraph::SetFillColor(Color(30, 30, 30, backAlpha));
+			XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
+		}
+		else
+		{
+			backAlpha = ChangeInt(backAlpha, -3, 0, 255);
+			if (backAlpha > 0)
+			{
+				XGraph::SetFillColor(Color(30, 30, 30, backAlpha));
+				XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
+			}
+		}
+	}
+}
+
 void Hello(RenWin& window)
 {
 	bool isExit = false;
@@ -582,7 +686,7 @@ void Hello(RenWin& window)
 			isExit = true;
 		}
 
-		static Color BackColor = XColor::DarkColor(User::MainColor, 0.15);
+		static Color BackColor = XColor::DarkColor(User::MainColor, 0.2);
 		DrawMicaBackground(window, 7.0, BackColor);
 
 		DrawHelloText(window,isExit);
@@ -627,6 +731,7 @@ bool Update::CheckUpdate(RenWin& window)
 	ifstream Check("Update.ini");
 	if (Check.is_open())
 	{
+		string ver;
 		Check >> ver;
 		Check.close();
 
@@ -634,14 +739,14 @@ bool Update::CheckUpdate(RenWin& window)
 		{
 			ShowUpdate(window);
 
-			RightMessage::ShowMessage(L"MiuBarrd已成功更新至" + XString::Convert::utf8_to_wstring(VER), L"更新完成", RightMessageType_SUCCESS, true);
+			RightMessage::ShowMessage(L"MiuBarrd已更新至" + XString::Convert::utf8_to_wstring(VER), L"更新完成", RightMessageType_SUCCESS, true);
 
-			ofstream Up("Update.ini");
+			/*ofstream Up("Update.ini");
 			if (Up.is_open())
 			{
 				Up << VER;
 				Up.close();
-			}
+			}*/
 
 			return true;
 		}
@@ -652,14 +757,14 @@ bool Update::CheckUpdate(RenWin& window)
 
 		ShowUpdate(window);
 
-		RightMessage::ShowMessage(L"MiuBarrd已成功更新至" + XString::Convert::utf8_to_wstring(VER), L"更新完成", RightMessageType_SUCCESS, true);
+		RightMessage::ShowMessage(L"MiuBarrd已更新至" + XString::Convert::utf8_to_wstring(VER), L"更新完成", RightMessageType_SUCCESS, true);
 
-		ofstream Up("Update.ini");
+		/*ofstream Up("Update.ini");
 		if (Up.is_open())
 		{
 			Up << VER;
 			Up.close();
-		}
+		}*/
 
 		return false;
 	}

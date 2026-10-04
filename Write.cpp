@@ -451,7 +451,9 @@ uniform int   uCount;         // 有效线段数
 uniform float uAlpha;         // 整体不透明度（荧光笔用）
 uniform float uFeather;       // 额外羽化半径（像素），用于把硬边过渡加宽
 
-// 点到线段的精确距离（含端点夹取），SDF 的核心
+// 点到线段的精确距离（含端点夹取），SDF 的核心。
+// 关键优化：内部用"距离平方"比较，避免每次迭代都调用 sqrt/length；
+// 平方比较与开方比较的拓扑一致，不影响取到哪条最近线段。
 float sdSegment(vec2 p, vec2 a, vec2 b)
 {
     vec2 pa = p - a;
@@ -462,19 +464,53 @@ float sdSegment(vec2 p, vec2 a, vec2 b)
     return length(pa - ba * h);
 }
 
+// 点到点距离的平方，用于圆角连接（round join）。
+float sdDot(vec2 p, vec2 c)
+{
+    vec2 d = p - c;
+    return dot(d, d);
+}
+
 void main()
 {
     // 顶点把画布像素坐标写进 texCoord，这里直接取用
     vec2 p = gl_TexCoord[0].xy;
 
-    float d = 1e9;
+    float d2 = 1e18;
     // 关键性能点：用 dynamic loop 时驱动可能按最大迭代展开，这里保持与 uCount 同步的早退,
     // 并只对真正需要的线段求距离；配合外层包围盒裁剪，绝大多数像素只跑少量迭代。
+    // 在"距离平方"域里取最小值：省掉每像素 uCount 次开方，
+    // 仅在最后对选出的最近线段开方一次，得到精确有向距离。
     for (int i = 0; i < 256; i++)
     {
         if (i >= uCount) break;
-        d = min(d, sdSegment(p, uSegs[i * 2], uSegs[i * 2 + 1]));
+        vec2 pa = p - uSegs[i * 2];
+        vec2 ba = uSegs[i * 2 + 1] - uSegs[i * 2];
+        float denom = dot(ba, ba);
+        float h = denom > 1e-6 ? clamp(dot(pa, ba) / denom, 0.0, 1.0) : 0.0;
+        vec2 diff = pa - ba * h;
+        d2 = min(d2, dot(diff, diff));
+
+        // 圆角连接（round join）：手写笔迹由首尾相接的短线段组成（上一段终点 == 本段起点）。
+        // 但相邻段仅取"各自线段"的最小距离时，两段各自是胶囊形，在外拐角处会留下一小块缺失，
+        // 视觉上表现为接缝处的凹口/不平滑。这里在共享端点处额外补一个"圆盘"参与 SDF 极小值：
+        // 圆盘半径 = 半线宽，与本段胶囊同宽，于是两段在连接处按圆的并集过渡，
+        // 接缝处自然圆润，无论线宽是否变化都不会出现缺口。
+        if (i > 0)
+        {
+            // 上一段终点：uSegs[i*2 - 1]（即 (i-1)*2 + 1）
+            vec2 prevEnd = uSegs[i * 2 - 1];
+            vec2 curStart = uSegs[i * 2];
+            // 端点重合判定：距离平方 < 1 像素²，视为连续笔画（避免把两笔独立短划也连起来）
+            if (dot(prevEnd - curStart, prevEnd - curStart) < 1.0)
+            {
+                d2 = min(d2, sdDot(p, curStart));
+            }
+        }
     }
+
+    // 只在最后对"最近的一条"开方，得到精确有向距离
+    float d = sqrt(d2);
 
     // 有向距离 < 0 表示在笔画内部
     d -= uHalfW;
@@ -482,11 +518,15 @@ void main()
     // 解析 AA 带宽：取屏幕空间导数，保证边缘过渡始终约 1 像素宽；
     // 再叠加 uFeather 让过渡带更宽，从而在放大/高 DPI 下获得更柔和的边缘。
     // max() 保证高倍缩放下过渡带不会被拉得比像素还细（避免锯齿回归）。
-    float aa = max(fwidth(d) * 0.75, uFeather);
-    float alpha = 1.0 - smoothstep(-aa, aa, d);
+    // 0.7071(=√2/2) 让过渡带恰好铺满 ±1 像素，边缘更顺滑而不发胖。
+    float aa = max(fwidth(d) * 0.7071, uFeather);
+    // 用等效于 smoothstep 的线性映射 + 后续 Hermite 曲线：
+    // 省掉 smoothstep 的分支与额外乘加，边界过渡在所有缩放级别下都连续平滑。
+    float a = clamp(0.5 - d / (2.0 * aa), 0.0, 1.0);
 
-    // 用三次平滑放大 alpha 的中间调，让内部实心区更饱满、边缘衰减更自然
-    alpha = alpha * alpha * (3.0 - 2.0 * alpha);
+    // 对 alpha 做三次平滑（Hermite 曲线），让内部实心区更饱满、
+    // 边缘衰减更自然，消除线性过渡残留的可见色阶。
+    float alpha = a * a * (3.0 - 2.0 * a);
 
     if (alpha <= 0.0) discard;
 
@@ -931,6 +971,9 @@ static int MindMapCreateNode(int parent, int x, int y, Color color)
 	// 新节点直接以初始长度作为缓动起点，避免出现从 0 拉到初始值的异常动画。
 	n.lineW = MindMapLineInitW();
 	n.lineH = MindMapContentH();
+	// 内容高度目标与初始高度一致：新节点从「刚好容纳默认内容区」开始，
+	// 后续只有用户笔迹纵向超出该下界时才会增长（只增不减）。
+	n.lineHTarget = n.lineH;
 	n.color = color;
 	n.lineEase.SetAnimationStartValue(n.lineW);
 	n.lineEase.end = n.lineEase.value;
@@ -1348,10 +1391,16 @@ static void MindMapShiftStrokesForDelta(const vector<Vector2i>& oldPos,
 
 		int parentRight = ParentRightEdgeOld(i);
 
+		// 纵向区间取「旧底」与「新底」的并集：
+		// 高度增长后节点下移，笔迹可能同时落在旧区间上沿与新区间下沿之间，
+		// 只取其中一个会漏搬，故取两者较大者作为下界。
+		int segB_old = oldPos[i].y + oldLineH[i] + MindMapLineGap();
+		int segB_new = oldPos[i].y + n.lineH + MindMapLineGap();
+		int segB = max(segB_old, segB_new);
+
 		int segL = oldPos[i].x;
 		int segR = oldPos[i].x + oldEffW[i] + MindMapLineTail();
 		int segT = oldPos[i].y;
-		int segB = oldPos[i].y + oldLineH[i] + MindMapLineGap();
 
 		for (int a = 0; a < (int)page.Data.size(); a++)
 		{
@@ -1421,10 +1470,13 @@ static void MindMapShiftStrokesForDelta(const vector<Vector2i>& oldPos,
 
 			int parentRight = ParentRightEdgeOld(i);
 
+			// 与第一遍保持同一口径：纵向区间取旧底与新底的并集
+			int segB = max(oldPos[i].y + oldLineH[i] + MindMapLineGap(),
+				oldPos[i].y + n.lineH + MindMapLineGap());
+
 			int segL = oldPos[i].x;
 			int segR = oldPos[i].x + oldEffW[i] + MindMapLineTail();
 			int segT = oldPos[i].y;
-			int segB = oldPos[i].y + oldLineH[i] + MindMapLineGap();
 
 			if (h.first < 0 || h.first >= (int)page.Data.size()) continue;
 			if (h.second < 0 || h.second >= (int)page.Data[h.first].size()) continue;
@@ -1483,7 +1535,12 @@ static void MindMapRelayout()
 	if (MindMapNodes.empty()) return;
 
 	// 记录重排前的节点位置、实际底线长度与内容高度（三者同源），
-	// 供笔迹搬移计算位移量、命中区间与纵向跨度
+	// 供笔迹搬移计算位移量、命中区间与纵向跨度。
+	//
+	// 关键：oldLineH 必须在「本帧高度已写入 lineH」之后记录，
+	// 而笔迹搬移又是一次性按「新旧几何差值」计算，因此这里额外记录
+	// 「本帧高度增长量」到 oldLineH，使搬移区间既能覆盖笔迹旧位置，
+	// 也能覆盖其因高度增长后应到达的新位置（取两者并集），避免漏搬。
 	vector<Vector2i> oldPos(MindMapNodes.size());
 	vector<int> oldEffW(MindMapNodes.size());
 	vector<int> oldLineH(MindMapNodes.size());
@@ -1960,6 +2017,60 @@ void MindMap::Update()
 		}
 	}
 
+	// 内容高度动态延展（纵向自动下移）。
+	// 与横向延展对称：当本次书写笔迹的纵向包围盒越过节点「底线」时，
+	// 说明用户在这个节点里写的内容已经超出了一行内容的默认高度，
+	// 此时把内容区高度 lineHTarget 撑大，使底线与后续兄弟/子项整体向下避让，
+	// 表现为「写满一行继续往下写时，导图自动往下长」。
+	//
+	// 只增不减：与 lineW 一致，避免擦除笔迹后布局突然回缩引起跳动。
+	// 亦不参与缓动（高度变化直接作用于布局），因为高度是「避让基准」，
+	// 若缓动会让父子间距在动画期间反复微调，观感抖动。
+	bool heightDirty = false;
+	if (CanAddLineLengh && hasWrite)
+	{
+		for (auto& n : MindMapNodes)
+		{
+			// 只有「当前选中节点」才允许被本笔画撑高，避免其他节点误判
+			if (n.id != MindMapSelect) continue;
+
+			// 横向仍需落在本节点区间内，否则纵向超出属于别的节点/空白区域
+			int segL = n.x;
+			int segR = n.x + n.lineW + MindMapLineTail();
+			if (writeRight < segL || writeLeft > segR) continue;
+
+			// 只按「笔迹底越过底线的超出量」增量撑高，而不是从头重算整段高度。
+			// 原因：若以内容区上沿（y - lineH/2）为基准算「所需总高度」，
+			// 会把默认内容高度 MindMapContentH() 也算进去 —— 用户只是往下写一点点，
+			// 也会被判成「需要一整屏默认高度」，导致高度暴涨。
+			// 这里改为：以当前底线为基准，仅在笔迹底越过底线时才把高度加上超出量。
+			//
+			// 底线纵坐标 = n.y + n.lineH（与 Draw / MindMapLayoutNode 完全一致）。
+			int lineBottom = n.y + n.lineH;
+			int overflow = writeBottom + MindMapLineGap() - lineBottom;
+
+			// 只有确实越过底线（overflow > 0）才增长高度；未越过则维持原高度。
+			// 高度只增不减，且每次只增加「本次超出的那一点点」，观感更自然。
+			if (overflow > 0)
+			{
+				n.lineHTarget = max(n.lineHTarget, n.lineH + overflow);
+				heightDirty = true;
+			}
+		}
+	}
+
+	// 把纵向目标高度回写到 lineH（本帧立即生效），并标记需要重排：
+	// 高度变大后布局基准（底线纵坐标）会下移，必须触发 MindMapRelayout，
+	// 否则子项/笔迹不会跟着往下避让。
+	for (auto& n : MindMapNodes)
+	{
+		if (n.lineHTarget > n.lineH)
+		{
+			n.lineH = n.lineHTarget;
+			heightDirty = true;
+		}
+	}
+
 	// 底线动态拓展：以缓动方式逼近各节点的目标长度（参照对齐线的动画逻辑）。
 	// 关键：lineEase.value 才是「当前实际长度」，lineW 是目标长度。
 	// 这里复用 MindMapUpdateLineEase()，与未激活分支走同一套推进逻辑，
@@ -1983,6 +2094,10 @@ void MindMap::Update()
 			break;
 		}
 	}
+
+	// 纵向高度变化同样会改变布局基准（底线纵坐标下移），
+	// 必须触发重排，否则子项/笔迹不会跟着往下避让。
+	if (heightDirty) layoutDirty = true;
 
 	// 底线变化会改变子项落点：重排（同时按包围盒搬移笔迹）。
 	// 注意：重排只做一次，避免与缓动同频抖动；笔迹搬移在重排内部完成，
@@ -2182,7 +2297,6 @@ void MindMap::Draw(RenderTarget& dest)
 }
 
 #pragma endregion
-
 
 //柳叶笔
 #pragma region MyRegion
@@ -3167,6 +3281,8 @@ void AdjustLineManager(Vector2i& pos)
 
 void ToolExpCheck(Vector2i& Pos)
 {
+	if (!User::EnableExpTool) return;
+
 	//Tool回收检测
 
 	static int BarX1 = WindowSize.x * 0.2,BarX2 = WindowSize.x * 0.8,BarY = WindowSize.y * 0.75;
@@ -4764,7 +4880,9 @@ struct ExportLayout
 };
 
 // 依据内容包围盒计算导出布局：长边固定 4K，短边按比例，四周保留空隙
-static ExportLayout ComputeExportLayout(const PageDataS& pd, bool includeMindMap)
+// pageScale：页面自身缩放系数（Write::Scale / 100），内容会按此比例放大/缩小，
+// 必须一并纳入画布尺寸计算，否则放大后的内容会超出画布被裁掉。
+static ExportLayout ComputeExportLayout(const PageDataS& pd, bool includeMindMap, float pageScale)
 {
 	ExportLayout out;
 
@@ -4778,9 +4896,9 @@ static ExportLayout ComputeExportLayout(const PageDataS& pd, bool includeMindMap
 		maxY = WindowSize.y;
 	}
 
-	// 内容包围盒尺寸（世界坐标）
-	float contentW = max(1.0f, maxX - minX);
-	float contentH = max(1.0f, maxY - minY);
+	// 内容包围盒尺寸（世界坐标）；页面缩放后实际占用空间同步放大
+	float contentW = max(1.0f, maxX - minX) * pageScale;
+	float contentH = max(1.0f, maxY - minY) * pageScale;
 
 	// 边距：按 DPI 缩放，保证 4K 下仍有明显空隙
 	float padWorld = EXPORT_PADDING * ScreenScale;
@@ -4837,12 +4955,14 @@ static bool PageHasContent(const PageDataS& pd)
 // 返回 false 表示纹理创建失败
 static bool RenderPageToTexture(const PageDataS& pd, bool drawMindMap, Texture& outTex)
 {
-	// 先依据内容计算布局（长边固定 4K，四周留白，短边自适应）
-	ExportLayout layout = ComputeExportLayout(pd, drawMindMap);
-
-	// 页面自身缩放（用户缩放板书内容时生效）
+	// 页面自身缩放（用户缩放板书内容时生效）；必须与布局共用同一系数，
+	// 否则画布按未缩放内容开尺寸，放大后的笔迹会溢出画布被裁掉（保存不全）。
 	float pageScale = pd.Scale / 100.0f;
 	if (pageScale <= 0) pageScale = 1.0f;
+
+	// 先依据内容计算布局（长边固定 4K，四周留白，短边自适应）
+	// 注意：把 pageScale 一并传入，使画布尺寸按「缩放后的实际占用」计算
+	ExportLayout layout = ComputeExportLayout(pd, drawMindMap, pageScale);
 
 	float eScale = layout.ssScale * pageScale;
 	float ePadX = layout.ssPad;	// 超采样画布上与最终画布等价的世界边距
@@ -5171,7 +5291,11 @@ void WriteCamera::Draw(RenWin& window)
 {
 	auto& pd = GetCurPage();
 
-	if (!WriteCamera::EnableWriteCamera || Write::Page != 0) return;
+	if (!WriteCamera::EnableWriteCamera || Write::Page != 0)
+	{
+		EnableAutoPhoto = false;
+		return;
+	}
 
 	float Scale = pd.Scale / 100.0;
 
@@ -5338,5 +5462,3 @@ int WriteCamera::GetRote(int page)
 }
 
 #pragma endregion
-
-

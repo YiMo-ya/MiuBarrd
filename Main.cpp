@@ -9,8 +9,158 @@
 #include "SoundPlayer.h"
 #include "Debug.h"
 #include "Update.h"
+#include "Error.h"
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
 
 NOXS; NOSTD;
+
+RenWin MainWindow;
+
+//异常
+#pragma region MyRegion
+
+wstring ExceptionCodeToString(DWORD code)
+{
+	switch (code)
+	{
+	case EXCEPTION_ACCESS_VIOLATION:         return L"EXCEPTION_ACCESS_VIOLATION";
+	case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:    return L"EXCEPTION_ARRAY_BOUNDS_EXCEEDED";
+	case EXCEPTION_BREAKPOINT:               return L"EXCEPTION_BREAKPOINT";
+	case EXCEPTION_DATATYPE_MISALIGNMENT:    return L"EXCEPTION_DATATYPE_MISALIGNMENT";
+	case EXCEPTION_FLT_DENORMAL_OPERAND:     return L"EXCEPTION_FLT_DENORMAL_OPERAND";
+	case EXCEPTION_FLT_DIVIDE_BY_ZERO:       return L"EXCEPTION_FLT_DIVIDE_BY_ZERO";
+	case EXCEPTION_FLT_INEXACT_RESULT:       return L"EXCEPTION_FLT_INEXACT_RESULT";
+	case EXCEPTION_FLT_INVALID_OPERATION:    return L"EXCEPTION_FLT_INVALID_OPERATION";
+	case EXCEPTION_FLT_OVERFLOW:             return L"EXCEPTION_FLT_OVERFLOW";
+	case EXCEPTION_FLT_STACK_CHECK:          return L"EXCEPTION_FLT_STACK_CHECK";
+	case EXCEPTION_FLT_UNDERFLOW:            return L"EXCEPTION_FLT_UNDERFLOW";
+	case EXCEPTION_ILLEGAL_INSTRUCTION:      return L"EXCEPTION_ILLEGAL_INSTRUCTION";
+	case EXCEPTION_IN_PAGE_ERROR:             return L"EXCEPTION_IN_PAGE_ERROR";
+	case EXCEPTION_INT_DIVIDE_BY_ZERO:       return L"EXCEPTION_INT_DIVIDE_BY_ZERO";
+	case EXCEPTION_INT_OVERFLOW:             return L"EXCEPTION_INT_OVERFLOW";
+	case EXCEPTION_INVALID_DISPOSITION:      return L"EXCEPTION_INVALID_DISPOSITION";
+	case EXCEPTION_NONCONTINUABLE_EXCEPTION: return L"EXCEPTION_NONCONTINUABLE_EXCEPTION";
+	case EXCEPTION_PRIV_INSTRUCTION:         return L"EXCEPTION_PRIV_INSTRUCTION";
+	case EXCEPTION_SINGLE_STEP:              return L"EXCEPTION_SINGLE_STEP";
+	case EXCEPTION_STACK_OVERFLOW:           return L"EXCEPTION_STACK_OVERFLOW";
+	default:
+	{
+		wchar_t buf[64];
+		swprintf(buf, 64, L"UNKNOWN_EXCEPTION (0x%08X)", code);
+		return std::wstring(buf);
+	}
+	}
+}
+
+// ---------- 获取时间戳 wstring ----------
+wstring GetTimeStampW()
+{
+	time_t now = time(NULL);
+	struct tm t;
+	localtime_s(&t, &now);
+
+	wchar_t buf[64];
+	wcsftime(buf, 64, L"%Y%m%d %H%M%S", &t);
+	return std::wstring(buf);
+}
+
+LONG WINAPI GlobalExceptionHandler(EXCEPTION_POINTERS* ep)
+{
+	DWORD code = ep->ExceptionRecord->ExceptionCode;
+	PVOID addr = ep->ExceptionRecord->ExceptionAddress;
+
+	XFile::CreateDirectory(L"DMP");
+
+	// ---------- 1. 写 minidump ----------
+	std::wstring dumpPath = std::wstring(filesystem::current_path().wstring()) + L"\\DMP\\"+ GetTimeStampW() + L"crash.dmp";
+	HANDLE hFile = CreateFileW(dumpPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hFile != INVALID_HANDLE_VALUE)
+	{
+		MINIDUMP_EXCEPTION_INFORMATION mei;
+		mei.ThreadId = GetCurrentThreadId();
+		mei.ExceptionPointers = ep;
+		mei.ClientPointers = FALSE;
+
+		MiniDumpWriteDump(
+			GetCurrentProcess(),
+			GetCurrentProcessId(),
+			hFile,
+			MiniDumpNormal,
+			&mei,
+			NULL,
+			NULL
+		);
+		CloseHandle(hFile);
+	}
+
+	// ---------- 2. 写 wstring 日志 ----------
+	std::wstring logPath = std::wstring(filesystem::current_path().wstring()) + L"\\DMP\\" + GetTimeStampW() + L"crash.log";
+	FILE* f = _wfopen(logPath.c_str(), L"a");
+	if (f)
+	{
+		std::wstring codeStr = ExceptionCodeToString(code);
+		std::wstring timeStr = GetTimeStampW();
+
+		fwprintf(f, L"[%s] Exception: %s\n", timeStr.c_str(), codeStr.c_str());
+		fwprintf(f, L"  Code:       0x%08X\n", code);
+		fwprintf(f, L"  Address:    0x%p\n", addr);
+
+		// 如果是访问违例，额外记录访问类型和地址
+		if (code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2)
+		{
+			DWORD accessType = ep->ExceptionRecord->ExceptionInformation[0];
+			PVOID accessAddr = (PVOID)ep->ExceptionRecord->ExceptionInformation[1];
+			fwprintf(f, L"  Access Type: %s\n", accessType == 0 ? L"Read" : (accessType == 1 ? L"Write" : L"Execute"));
+			fwprintf(f, L"  Access Addr: 0x%p\n", accessAddr);
+		}
+
+		fwprintf(f, L"  Thread ID:  %u\n", GetCurrentThreadId());
+		fwprintf(f, L"  Process ID: %u\n", GetCurrentProcessId());
+		fwprintf(f, L"\n");
+		fclose(f);
+	}
+
+
+	vector<wstring> Discription = {
+		L"MiuBarrd发生严重错误并崩溃。",
+		L"异常类型: " + ExceptionCodeToString(code),
+		L"异常地址: 0x" + std::to_wstring((uintptr_t)addr),
+		L"时间: " + GetTimeStampW(),
+		L"dump 文件: DMP/" + GetTimeStampW() + L".dmp",
+		L"重启后可能解决此问题。"
+	};
+
+	Error::ShowError(MainWindow, Discription, ExceptionCodeToString(code));
+
+	return EXCEPTION_EXECUTE_HANDLER;
+}
+
+//测试
+#pragma region MyRegion
+
+void Test_CppException()
+{
+	throw std::runtime_error("测试 C++ 异常");
+}
+
+class Base
+{
+public:
+	virtual void foo() = 0;
+};
+
+void Test_PureCall()
+{
+	Base* b = (Base*)malloc(sizeof(Base));  // 没构造，vtable 是 0
+	b->foo();  // EXCEPTION_ILLEGAL_INSTRUCTION 或 0xC0000005
+	free(b);
+}
+
+#pragma endregion
+
+
+#pragma endregion
 
 static int Random(int min, int max) {
 	static thread_local std::mt19937 gen(std::random_device{}());
@@ -152,6 +302,8 @@ void ShowTime(RenWin& window)
 //主逻辑
 void App(RenWin& window)
 {
+	SetUnhandledExceptionFilter(GlobalExceptionHandler);
+
 	XWindow::MoveWindow(window, 0, 1);
 	XWindow::SetWindowSize(window, ScreenSize.x, ScreenSize.y - 1);
 
@@ -283,8 +435,6 @@ int main()
 	//使用手动批处理避免意外
 	XBatch::SetBatchType(BATCH_HANDLED);
 
-	RenWin MainWindow;
-
 	User::Read();
 
 	XWindow::SetDPIAware();
@@ -305,11 +455,31 @@ int main()
 	XWindow::SetIcon(MainWindow, ImgPath + L"Icon.dll");
 	SetWindowClassIconFromExe(MainWindow);
 
-	//设置字体
-	XText::SetFont("FontLoader.dll");
-	
 	//初始化
 	Init(MainWindow);
+
+	//设置字体
+	if (XFile::Exists(L"FontLoader.dll"))
+	{
+		XText::SetFont("FontLoader.dll");
+	}
+	else
+	{
+		XWindow::MoveWindow(MainWindow, 0, 1);
+		XWindow::SetWindowSize(MainWindow, ScreenSize.x, ScreenSize.y - 1);
+
+		XWindow::DWM::SetWindowRoundCorner(MainWindow, CORNER_NOROUND);
+		XWindow::DWM::SetWindowBackType(MainWindow, BACKTYPE_NULL);
+		XWindow::RemoveWindowExStyle(MainWindow, WS_EX_LAYERED);
+
+		SetWindowPos(MainWindow.getNativeHandle(), HWND_DESKTOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
+		XText::FindFont("微软雅黑");
+		WindowSize = ScreenSize;
+		Error::ShowError(
+			MainWindow, { L"MiuBarrd发生严重错误并崩溃了",L"错误原因：缺失关键文件",L"重新安装可以解决此问题",L"错误代码：FONTDLL_LOST"}, L"FONTDLL_LOST");
+	}
+
 	SetForeWindow(MainWindow.getNativeHandle());
 
 	//先禁用右侧消息，启用在Tool::Show

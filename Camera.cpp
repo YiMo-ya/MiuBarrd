@@ -776,7 +776,7 @@ bool CameraManager::NeedAutoPhoto()
 
     ++PhotoClock;
 
-    if (PhotoClock > 40)
+    if (PhotoClock > 80)
     {
         PhotoClock = 0;   // 先复位，再返回，否则成为死代码
         return true;      // 稳定超过 120 帧 → 拍一张

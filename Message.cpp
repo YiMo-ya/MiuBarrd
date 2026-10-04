@@ -1,5 +1,6 @@
 #include "Message.h"
 #include "Shared.h"
+#include "User.h"
 
 NOXS;
 
@@ -40,15 +41,27 @@ static void InitMessageWindow(int r,int g,int b, IconType IcoType)
 
     //加载图标
 #pragma region MyRegion
-    if (IcoType == ICOTYPE_DEBUG) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Debug.dll");
-	if (IcoType == ICOTYPE_INFO) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Info.dll");
-    if (IcoType == ICOTYPE_WARNING) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Warning.dll");
-    if (IcoType == ICOTYPE_ERROR) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Error.dll");
-    if (IcoType == ICOTYPE_SUCCESS) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Success.dll");
-    if (IcoType == ICOTYPE_QUESTION) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Question.dll");
+    if(!User::EnableAnimation)
+    {
+        if (IcoType == ICOTYPE_DEBUG) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Debug.dll");
+        if (IcoType == ICOTYPE_INFO) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Info.dll");
+        if (IcoType == ICOTYPE_WARNING) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Warning.dll");
+        if (IcoType == ICOTYPE_ERROR) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Error.dll");
+        if (IcoType == ICOTYPE_SUCCESS) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Success.dll");
+        if (IcoType == ICOTYPE_QUESTION) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Question.dll");
+    }
+    else
+    {
+        if (IcoType == ICOTYPE_DEBUG) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Animation\\Debug.dll");
+        if (IcoType == ICOTYPE_INFO) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Animation\\Info.dll");
+        if (IcoType == ICOTYPE_WARNING) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Animation\\Warning.dll");
+        if (IcoType == ICOTYPE_ERROR) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Animation\\Error.dll");
+        if (IcoType == ICOTYPE_SUCCESS) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Animation\\Success.dll");
+        if (IcoType == ICOTYPE_QUESTION) XImage::NewImage(Ico, ImgPath + L"\\Msg\\Animation\\Question.dll");
+    }
 #pragma endregion
 
-
+    if (!User::EnableAnimation) Ico.color = MessageColor[IcoType];
 	
 	MessageWindow.requestFocus();
 }
@@ -162,7 +175,6 @@ int Message::ShowMessage(MsgS msg,std::wstring WindowTitle)
        XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, ScreenSize.x * 2 / 5, ScreenSize.y / 6, MessageWindow);
 
         //显示图标
-		Ico.color = MessageColor[msg.Ico];
         XImage::PutScaleImage(Ico, w / 10, h / 2, w / 8 / 512.0, w / 8 / 512.0, MessageWindow, 0.5, 0.5);
 
         // --- 自动换行渲染逻辑开始 ---

@@ -227,7 +227,7 @@ void EnterSetting(RenWin& window)
 	int RowW = BarW * 0.84;
 
 	//每行入场动画：从下滑入 + 淡入
-	const int RowCount = 4;
+	const int RowCount = 5;
 	EV RowOffset[RowCount];
 	EV RowAlpha[RowCount];
 	for (int i = 0; i < RowCount; i++)
@@ -241,7 +241,7 @@ void EnterSetting(RenWin& window)
 	//控件动画
 	EV AAKnobScale;
 	AAKnobScale.SetAnimationStartValue(100);
-	ToggleState FixLineKnob, WriteAdjustKnob;
+	ToggleState FixShapeKnob, WriteAdjustKnob, AnimationKnob, ExpKnob;
 
 
 	//颜色块缩放动画
@@ -268,8 +268,8 @@ void EnterSetting(RenWin& window)
 			{
 				if (i == 0 || RowOffset[i - 1].frame > 3)
 				{
-					RowOffset[i].UpdateAnimation(XEase::EaseBasic::easeOutBack, 2);
-					RowAlpha[i].UpdateAnimation(XEase::EaseBasic::easeOut, 3);
+					RowOffset[i].UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+					RowAlpha[i].UpdateAnimation(XEase::EaseBasic::easeOut, 4);
 				}
 			}
 		}
@@ -284,7 +284,7 @@ void EnterSetting(RenWin& window)
 		//标题
 		XText::SetFontConfig(Color::White, FONTSIZE * 1.2);
 		XText::SetFontAdjust(ADJUST_CENTER, ADJUST_TOP);
-		XText::Xyprintf(BarX + BarW / 2, BarY.value + BarH * 0.04, L"设置", window);
+		XText::Xyprintf(BarX + BarW / 2, BarY.value + BarH * 0.04, L"MiuBarrd 设置", window);
 
 		int y = BarY.value + BarH * 0.16;
 
@@ -324,18 +324,18 @@ void EnterSetting(RenWin& window)
 		}
 		y += RowH;
 
-		//3. 图形矫正
+		//2. 图形矫正
 		{
-			int ox = (int)RowOffset[2].value;
-			int alpha = (int)RowAlpha[2].value;
+			int ox = (int)RowOffset[1].value;
+			int alpha = (int)RowAlpha[1].value;
 
 			XText::SetFontConfig(Color(255, 255, 255, alpha), FONTSIZE * 1.2);
 			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
-			XText::Xyprintf(RowX, y + RowH / 2 + ox, L"图形矫正", window);
+			XText::Xyprintf(RowX, y + RowH / 2 + ox, L"启用图形矫正", window);
 
 			int bw = RowH * 0.8, bh = RowH * 0.4;
 			int bx = RowX + RowW * 0.72;
-			bool on = DrawSwitch(bx, y + RowH / 2 - bh / 2 + ox, bw, bh, User::EnableFixShape, FixLineKnob, window);
+			bool on = DrawSwitch(bx, y + RowH / 2 - bh / 2 + ox, bw, bh, User::EnableFixShape, FixShapeKnob, window);
 			if (on != User::EnableFixShape)
 			{
 				User::EnableFixShape = on;
@@ -344,14 +344,14 @@ void EnterSetting(RenWin& window)
 		}
 		y += RowH;
 
-		//4. 书写对齐线
+		//3. 书写对齐线
 		{
-			int ox = (int)RowOffset[3].value;
-			int alpha = (int)RowAlpha[3].value;
+			int ox = (int)RowOffset[2].value;
+			int alpha = (int)RowAlpha[2].value;
 
 			XText::SetFontConfig(Color(255, 255, 255, alpha), FONTSIZE * 1.2);
 			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
-			XText::Xyprintf(RowX, y + RowH / 2 + ox, L"书写对齐线", window);
+			XText::Xyprintf(RowX, y + RowH / 2 + ox, L"启用书写对齐线", window);
 
 			int bw = RowH * 0.8, bh = RowH * 0.4;
 			int bx = RowX + RowW * 0.72;
@@ -359,6 +359,46 @@ void EnterSetting(RenWin& window)
 			if (on != User::EnableWriteAdjust)
 			{
 				User::EnableWriteAdjust = on;
+				Apply();
+			}
+		}
+		y += RowH;
+
+		//4. 动画形象
+		{
+			int ox = (int)RowOffset[3].value;
+			int alpha = (int)RowAlpha[3].value;
+
+			XText::SetFontConfig(Color(255, 255, 255, alpha), FONTSIZE * 1.2);
+			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
+			XText::Xyprintf(RowX, y + RowH / 2 + ox, L"启用动画形象", window);
+
+			int bw = RowH * 0.8, bh = RowH * 0.4;
+			int bx = RowX + RowW * 0.72;
+			bool on = DrawSwitch(bx, y + RowH / 2 - bh / 2 + ox, bw, bh, User::EnableAnimation, AnimationKnob, window);
+			if (on != User::EnableAnimation)
+			{
+				User::EnableAnimation = on;
+				Apply();
+			}
+		}
+		y += RowH;
+
+		//5. 缩回UI
+		{
+			int ox = (int)RowOffset[4].value;
+			int alpha = (int)RowAlpha[4].value;
+
+			XText::SetFontConfig(Color(255, 255, 255, alpha), FONTSIZE * 1.2);
+			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
+			XText::Xyprintf(RowX, y + RowH / 2 + ox, L"启用工具栏自主收缩", window);
+
+			int bw = RowH * 0.8, bh = RowH * 0.4;
+			int bx = RowX + RowW * 0.72;
+			bool on = DrawSwitch(bx, y + RowH / 2 - bh / 2 + ox, bw, bh, User::EnableExpTool, ExpKnob, window);
+			if (on != User::EnableExpTool)
+			{
+				User::EnableExpTool = on;
 				Apply();
 			}
 		}

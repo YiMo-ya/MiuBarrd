@@ -9,6 +9,10 @@ public:
 	static bool EnableFixShape;
 	static bool EnableWriteAdjust;
 
+	static bool EnableAnimation;
+
+	static bool EnableExpTool;
+
 	static void Read();
 
 	//保存配置到 User.ini

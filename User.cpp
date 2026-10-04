@@ -4,9 +4,11 @@
 
 NOSTD; NOXS;
 
-Color User::MainColor = Color(180, 200, 255);
+Color User::MainColor = Color(190, 170, 255);
 bool User::EnableFixShape = true;
 bool User::EnableWriteAdjust = true;
+bool User::EnableAnimation = true;
+bool User::EnableExpTool = true;
 
 void User::Read()
 {
@@ -19,20 +21,28 @@ void User::Read()
 			UserLoad >> temp;
 			if (temp.empty()) break;
 
-			if (temp == "{MainColor}")
+			if (temp == "[MAINCOLOR]")
 			{
 				int r, g, b;
 
 				UserLoad >> r >> g >> b;
 				MainColor = Color(r, g, b);
 			}
-			if (temp == "{FIXLINE}")
+			if (temp == "[FIXSHAPE]")
 			{
 				UserLoad >> EnableFixShape;
 			}
-			if (temp == "{ADJUST}")
+			if (temp == "[ADJUST]")
 			{
 				UserLoad >> EnableWriteAdjust;
+			}
+			if (temp == "[ANIMATION]")
+			{
+				UserLoad >> EnableAnimation;
+			}
+			if (temp == "[EXP]")
+			{
+				UserLoad >> EnableExpTool;
 			}
 		}
 	}
@@ -40,11 +50,16 @@ void User::Read()
 	{
 		UserLoad.close();
 
-		ofstream ReUser("User.ini");
+		ofstream UserSave("User.ini");
+		if (!UserSave.is_open()) return;
 
-		ReUser << "{MainColor} 180 200 255" << endl << "{FXAA} 2" << "{FIXLINE} 1" << "{ADJUST} 1";
+		UserSave << "[MAINCOLOR] " << to_string(MainColor.r) << " " << to_string(MainColor.g) << " " << to_string(MainColor.b) << endl
+			<< "[FIXSHAPE] " << to_string(EnableFixShape ? 1 : 0) << endl
+			<< "[ADJUST] " << to_string(EnableWriteAdjust ? 1 : 0) << endl
+			<< "[ANIMATION] " << to_string(EnableAnimation ? 1 : 0) << endl
+			<< "[EXP] " << to_string(EnableExpTool ? 1 : 0) << endl;;
 
-		ReUser.close();
+		UserSave.close();
 	}
 }
 
@@ -53,9 +68,11 @@ void User::Save()
 	ofstream UserSave("User.ini");
 	if (!UserSave.is_open()) return;
 
-	UserSave << "{MainColor} " << to_string(MainColor.r) << " " << to_string(MainColor.g) << " " << to_string(MainColor.b) << endl
-		<< "{FIXLINE} " << to_string(EnableFixShape ? 1 : 0) << endl
-		<< "{ADJUST} " << to_string(EnableWriteAdjust ? 1 : 0) << endl;
+	UserSave << "[MAINCOLOR] " << to_string(MainColor.r) << " " << to_string(MainColor.g) << " " << to_string(MainColor.b) << endl
+		<< "[FIXSHAPE] " << to_string(EnableFixShape ? 1 : 0) << endl
+		<< "[ADJUST] " << to_string(EnableWriteAdjust ? 1 : 0) << endl
+		<< "[ANIMATION] " << to_string(EnableAnimation ? 1 : 0) << endl
+		<< "[EXP] " << to_string(EnableExpTool ? 1 : 0) << endl;;
 
 	UserSave.close();
 

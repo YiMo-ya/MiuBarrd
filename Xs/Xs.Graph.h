@@ -249,7 +249,7 @@ namespace XImage
 	/// <param name="w">索取图像的宽</param>
 	/// <param name="h">索取图像的高</param>
 	/// <returns></returns>
-	bool NewImage(IMAGE& img,const String& filename, int x = 0, int y = 0, int w = 0, int h = 0);
+	bool NewImage(IMAGE& img,const std::filesystem::path& filename, int x = 0, int y = 0, int w = 0, int h = 0);
 
 	/// <summary>
 	/// 从窗口上获取图像
@@ -756,14 +756,14 @@ namespace XText
 	/// 从文件中设置字体
 	/// </summary>
 	/// <param name="filename">文件名</param>
-	void SetFont(const String& filename);
+	void SetFont(const std::filesystem::path& filename);
 	/// <summary>
 	/// 从文件中设置字体
 	/// </summary>
 	/// <param name="filename">文件名</param>
 	/// <param name="color">要设置的颜色</param>
 	/// <param name="size">要设置的大小</param>
-	void SetFont(const String& filename, Color color, int size);
+	void SetFont(const std::filesystem::path& filename, Color color, int size);
 
 	/// <summary>
 	/// 查找并设置本地安装的字体

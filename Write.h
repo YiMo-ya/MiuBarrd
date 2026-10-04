@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Xs/Xs.h"
 #include "User.h"
@@ -109,6 +109,13 @@ public:
 		int x = 0, y = 0;            // 节点内容左上角坐标（屏幕/层坐标）
 		int lineW = 0;               // 底线当前长度（动态拓展后的长度）
 		int lineH = 0;               // 内容区高度（用于父子的空隙计算）
+
+		/// <summary>
+		/// 内容区高度的目标值：书写内容纵向超出节点下界时由此值记录新的高度，
+		/// lineH 随之逼近本值，使节点底线与整棵子树自动向下避让。
+		/// 语义上与 lineW（底线长度目标）对称，仅增不减。
+		/// </summary>
+		int lineHTarget = 0;
 
 		EV lineEase;                 // 底线长度的缓动（动态拓展动画）
 

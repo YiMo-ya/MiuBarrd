@@ -187,12 +187,22 @@ void RightMessage::ShowMessage(wstring text, wstring title, RightMessageType typ
 	RightMessages.push_back({ x,SplitWStringByWidth(text,28),L"注意：" + title,TotalShowTime,IMAGE(),type,important });
 
 	auto& msg = RightMessages.back();
-	if (msg.type == RightMessageType_INFO) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Info.dll");
-	if (msg.type == RightMessageType_WARNING) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Warning.dll");
-	if (msg.type == RightMessageType_ERROR) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Error.dll");
-	if (msg.type == RightMessageType_SUCCESS) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Success.dll");
+	if(!User::EnableAnimation)
+	{
+		if (msg.type == RightMessageType_INFO) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Info.dll");
+		if (msg.type == RightMessageType_WARNING) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Warning.dll");
+		if (msg.type == RightMessageType_ERROR) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Error.dll");
+		if (msg.type == RightMessageType_SUCCESS) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Success.dll");
+	}
+	else
+	{
+		if (msg.type == RightMessageType_INFO) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Animation\\Info.dll");
+		if (msg.type == RightMessageType_WARNING) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Animation\\Warning.dll");
+		if (msg.type == RightMessageType_ERROR) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Animation\\Error.dll");
+		if (msg.type == RightMessageType_SUCCESS) XImage::NewImage(msg.img, ImgPath + L"\\Msg\\Animation\\Success.dll");
+	}
 	if (RightMessageColor_Border[0] == Color::White) RightMessageColor_Border[0] = User::MainColor;
-	msg.img.color = RightMessageColor_Border[msg.type];
+	if (!User::EnableAnimation) msg.img.color = RightMessageColor_Border[msg.type];
 }
 
 void RightMessage::SetVisible(bool v)

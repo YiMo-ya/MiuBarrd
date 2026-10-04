@@ -12,4 +12,4 @@ std::wstring ShaderPath = std::filesystem::current_path().wstring() + L"\\Shader
 
 int UpdateUser = 0;
 
-std::string VER = "1.6.3.0";
+std::string VER = "1.7.0.0";
