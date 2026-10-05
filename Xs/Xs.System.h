@@ -1,5 +1,6 @@
 #pragma once
 #include "Xs.Main.h"
+#include <shellapi.h>
 #include <shobjidl.h>
 #include <atomic>
 #undef ERROR

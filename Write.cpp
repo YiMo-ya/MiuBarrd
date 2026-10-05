@@ -1,4 +1,5 @@
-﻿#include "Write.h"
+﻿#include "ShareFile.h"
+#include "Write.h"
 #include "Tool.h"
 #include "Shared.h"
 #include "Message.h"
@@ -4704,12 +4705,15 @@ void EditImage(int i, RenWin& window)
 static const float EXPORT_LONG_SIDE = 3840.0f;
 
 // 导出画布边缘留白（逻辑像素），乘以 ScreenScale 后换算到实际像素
-static const float EXPORT_PADDING = 48.0f;
+static const float EXPORT_PADDING = 60.0f;
 
 // 4K 画布下的叠加渲染倍率：以 1.35 倍超采样后再线性降采样，
 // 用「先放大后缩小」的方式平滑边缘，显著削弱 SDF 在 4K 下的残留锯齿；
 // 相比直接对裸露笔迹做 4x 超采样，显存与耗时更可控，兼顾性能。
 static const float EXPORT_AA_SUPERSAMPLE = 1.35f;
+
+//辅助函数
+#pragma region MyRegion
 
 // ===== 思维导图导出绘制（无按钮，底线延展替代） =====
 static void MindMapDrawToExport(RenderTarget& rt, float scale, float camX, float camY,
@@ -5087,7 +5091,99 @@ static int SaveAsImage(const wstring& dir, const wstring& ext)
 	return saved;
 }
 
-void WriteFile::Save(wstring path, std::wstring ExtName)
+#pragma endregion
+
+//辅助函数
+#pragma region MyRegion
+
+static void SetWindowClassIconFromExe(sf::Window& window, int resId = 1)
+{
+	HWND hwnd = static_cast<HWND>(window.getNativeHandle());
+	HINSTANCE hInst = GetModuleHandle(nullptr);
+
+	// 大图标（Alt+Tab / 任务栏大视图）
+	HICON hBig = (HICON)LoadImage(
+		hInst,
+		MAKEINTRESOURCE(resId),
+		IMAGE_ICON,
+		GetSystemMetrics(SM_CXICON),
+		GetSystemMetrics(SM_CYICON),
+		LR_DEFAULTCOLOR);
+	// 小图标（标题栏 / 任务管理器进程页）
+	HICON hSmall = (HICON)LoadImage(
+		hInst,
+		MAKEINTRESOURCE(resId),
+		IMAGE_ICON,
+		GetSystemMetrics(SM_CXSMICON),
+		GetSystemMetrics(SM_CYSMICON),
+		LR_DEFAULTCOLOR);
+
+	if (hBig)
+		SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hBig);
+	if (hSmall)
+		SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hSmall);
+
+	// 可选：补窗口类图标，防 DefWindowProc 回退
+	if (hBig || hSmall) {
+		SetClassLongPtr(hwnd, GCLP_HICON, (LONG_PTR)hBig);
+		SetClassLongPtr(hwnd, GCLP_HICONSM, (LONG_PTR)hSmall);
+	}
+}
+
+#pragma endregion
+
+IMAGE QRImg;
+void ShowQR(IMAGE& img,RenWin& window, ShareFile& Share)
+{
+	RenWin QRWindow;
+	XWindow::CreateGraphWindow(QRWindow, -1, -1, WindowSize.x / 2, WindowSize.y / 2, L"MiuBarrd分享板书的QR码",Style::Titlebar | Style::Close);
+	XWindow::DWM::SetWindowTitleBarColor(QRWindow, XWindow::GetBackGroundColor());
+	XWindow::DWM::SetWindowBorderColor(QRWindow, User::MainColor);
+	XWindow::RemoveWindowStyle(QRWindow, WS_MAXIMIZEBOX);
+	XWindow::RemoveWindowStyle(QRWindow, WS_MINIMIZEBOX);
+	
+	//置顶窗口
+	SetWindowLongPtrW(QRWindow.getNativeHandle(), GWL_EXSTYLE,
+		WS_EX_TOPMOST);
+	SetWindowPos(QRWindow.getNativeHandle(), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
+	static float Scale = WindowSize.x / 5 / (float)img.w;
+
+	while (XMsg::IsOpen(QRWindow))
+	{
+		XWindow::DelayFps(QRWindow);
+
+		XText::SetFontAdjust(ADJUST_LEFT, ADJUST_TOP);
+		XText::SetFontConfig(Color::White, FONTSIZE);
+		static int tipx = WindowSize.x / 100, tipy = WindowSize.x / 100;
+		XText::Xyprintf(tipx, tipy, L"使用手机的任意QR码扫描器扫描此QR码。", QRWindow);
+		XText::SetFontConfig(Color(255,100,100), FONTSIZE);
+		XText::Xyprintf(tipx, tipy * 2, L"注意：关闭此页面，链接将会失效。", QRWindow);
+
+		XImage::PutScaleImage(img, WindowSize.x / 4, WindowSize.y / 4, Scale, Scale, QRWindow, 0.5, 0.5);
+
+		XGraph::SetColor(User::MainColor);
+		static int w = WindowSize.x / 5, h = WindowSize.x / 5;
+		static int lw = WindowSize.x / 200;
+		static int r = WindowSize.x / 200;
+		XGraph::LineShape::SetLineWidth(lw);
+		XGraph::RectangleShape::RoundRect(WindowSize.x / 4 - w / 2, WindowSize.y / 4 - h / 2, w, h, r, QRWindow);
+
+		if (!Share.isRunning())
+		{
+			Message::ShowMessage("网络配置错误。", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
+			XWindow::SetBackGroundColor(Color(30, 30, 30));
+
+			break;
+		}
+	}
+
+	XMsg::ResetCloseMsg();
+	XMsg::ClearMsg();
+	XMsg::UpdateMsg(window);
+}
+
+void WriteFile::Save(RenWin& window,wstring path, std::wstring ExtName)
 {
 	wstring extLower = ExtName;
 	for (auto& ch : extLower) ch = (wchar_t)towlower(ch);
@@ -5099,23 +5195,92 @@ void WriteFile::Save(wstring path, std::wstring ExtName)
 
 	if (extLower != L"mwf")
 	{
-		int saved = SaveAsImage(path, extLower);
-
-		if (saved > 0)
+		if(extLower == L"png")
 		{
-			if (1 == Message::ShowMessage("已导出图片", "保存成功", ICOTYPE_SUCCESS, { "确定","打开文件夹" }, 1, L"MiuBarrd"))
+			int saved = SaveAsImage(path, extLower);
+
+			if (saved > 0)
 			{
-				ShellExecuteW(nullptr, L"open", L"explorer.exe",
-					path.c_str(), nullptr, SW_SHOWNORMAL);
+				if (1 == Message::ShowMessage("已导出图片", "保存成功", ICOTYPE_SUCCESS, { "确定","打开文件夹" }, 1, L"MiuBarrd"))
+				{
+					ShellExecuteW(nullptr, L"open", L"explorer.exe",
+						path.c_str(), nullptr, SW_SHOWNORMAL);
+				}
+				XWindow::SetBackGroundColor(Color(30, 30, 30));
 			}
-			XWindow::SetBackGroundColor(Color(30, 30, 30));
+			else
+			{
+				Message::ShowMessage("导出图片失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
+				XWindow::SetBackGroundColor(Color(30, 30, 30));
+			}
+			return;
 		}
 		else
 		{
-			Message::ShowMessage("导出图片失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-			XWindow::SetBackGroundColor(Color(30, 30, 30));
+			int saved = SaveAsImage(path, L"png");
+
+			if (saved > 0)
+			{
+				ShareFile Share(9000);
+
+				if(XFile::Exists(path + L"\\1.png"))
+				{
+					ShellExecuteW(NULL, L"open", L"MiuBarrdLoader.exe", NULL, NULL, false);
+
+					Share.start(path + L"\\1.png");
+					Share.startTunnel();
+
+					IMAGE QR;
+
+					QR.texture = Share.getPublicQRTexture(8, 1);
+					Vector2u Size = QR.texture.getSize();
+					QR.w = int(Size.x);
+					QR.h = int(Size.y);
+
+					if(QR.w > 0 && QR.h > 0)
+					{
+						HWND hWnd = FindWindowW(NULL, L"MiuBarrdLoader");
+						if (IsWindow(hWnd))
+						{
+							// 发送关闭消息
+							SendMessageW(hWnd, WM_CLOSE, 0, 0);
+						}
+
+						ShowQR(QR, window, Share);
+					}
+					else
+					{
+						Message::ShowMessage("转换QR码失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
+						XWindow::SetBackGroundColor(Color(30, 30, 30));
+					}
+
+					ShellExecuteW(NULL, L"open", L"MiuBarrdLoader.exe", NULL, NULL, false);
+
+					Share.stop();
+					Share.stopTunnel();
+
+					HWND hWnd = FindWindowW(NULL, L"MiuBarrdLoader");
+					if (IsWindow(hWnd))
+					{
+						// 发送关闭消息
+						SendMessageW(hWnd, WM_CLOSE, 0, 0);
+					}
+
+					SetWindowClassIconFromExe(window);
+				}
+				else
+				{
+					Message::ShowMessage("配置路径失败：" + path, "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
+					XWindow::SetBackGroundColor(Color(30, 30, 30));
+				}
+			}
+			else
+			{
+				Message::ShowMessage("由于文件内容配置不当导致保存失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
+				XWindow::SetBackGroundColor(Color(30, 30, 30));
+			}
+			return;
 		}
-		return;
 	}
 
 	ofstream save(path + L"\\" + fileName + L".mwf");
@@ -5167,23 +5332,6 @@ void WriteFile::Load(wstring path)
 		RightMessage::ShowMessage(L"打开板书文件失败", L"加载板书", RightMessageType_ERROR, false);
 		BottomMessage::AddMessage(110, L"加载板书失败", BottomMessageType_ERROR, 240);
 		return;
-	}
-
-	if (PageData.empty()) return;
-
-	if (!PageData[0].Data.empty())
-	{
-		int r = Message::ShowMessage("是否丢弃之前的板书?", "导入文件", ICOTYPE_QUESTION, { "丢弃", "保存" }, 1, L"MiuBarrd");
-		if (r == 1)
-		{
-			wstring P = XFile::GetDir::Desktop().wstring()
-				+ L"\\板书"
-				+ to_wstring(XTime::GetTimeNow_Day())
-				+ to_wstring(XTime::GetTimeNow_Hour())
-				+ to_wstring(XTime::GetTimeNow_Min())
-				+ L".mwf";
-			Save(P, L"桌面");
-		}
 	}
 
 	XWindow::SetBackGroundColor(Color(30, 30, 30));

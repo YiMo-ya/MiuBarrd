@@ -164,8 +164,6 @@ int ChangeInt(int v, int speed, int Min, int Max)
 	return vv;
 }
 
-
-
 //绘制问好文字
 void DrawHelloText(RenWin& window,bool& isExit)
 {
@@ -186,7 +184,7 @@ void DrawHelloText(RenWin& window,bool& isExit)
 		"初见如旧雨，重逢似晨星。",
 		"倾盖如故，白首如新。",
 		"MiuBarrd准备就绪。",
-		"适在AI，MiuBarrd已就绪。",
+		"庆祝MiuBarrd一周岁啦！！！",
 		"潮平连旧渡，星动识归人。"
 	};
 	static Color TextColorNow = Color::Black;
@@ -741,12 +739,12 @@ bool Update::CheckUpdate(RenWin& window)
 
 			RightMessage::ShowMessage(L"MiuBarrd已更新至" + XString::Convert::utf8_to_wstring(VER), L"更新完成", RightMessageType_SUCCESS, true);
 
-			/*ofstream Up("Update.ini");
+			ofstream Up("Update.ini");
 			if (Up.is_open())
 			{
 				Up << VER;
 				Up.close();
-			}*/
+			}
 
 			return true;
 		}
@@ -759,12 +757,12 @@ bool Update::CheckUpdate(RenWin& window)
 
 		RightMessage::ShowMessage(L"MiuBarrd已更新至" + XString::Convert::utf8_to_wstring(VER), L"更新完成", RightMessageType_SUCCESS, true);
 
-		/*ofstream Up("Update.ini");
+		ofstream Up("Update.ini");
 		if (Up.is_open())
 		{
 			Up << VER;
 			Up.close();
-		}*/
+		}
 
 		return false;
 	}

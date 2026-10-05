@@ -197,16 +197,16 @@ int ChooseType(RenWin& window)
 	XWindow::SetOwnerWindow(window);
 	XWindow::DWM::SetWindowBorderColor(temp, User::MainColor);
 
-	const int ChooseAll = 2;
+	const int ChooseAll = 3;
 	int BarW = WindowSize.x / 5, BarH = (WindowSize.y / 2 - (ChooseAll + 1) * UISpace) / ChooseAll;
 
 	static IMAGE Icon[ChooseAll];
-	static wstring Name[ChooseAll] = { L"Mwf板书文件",L"Png图片文件" };
+	static wstring Name[ChooseAll] = { L"Mwf板书文件",L"Png图片文件",L"QR码分享"};
 
 	static bool init = false;
 	if (!init)
 	{
-		static wstring ImgName[ChooseAll] = { L"MWF.dll",L"PNG.dll" };
+		static wstring ImgName[ChooseAll] = { L"MWF.dll",L"PNG.dll",L"QR.dll"};
 
 		for (int i = 0; i < ChooseAll; i++)
 		{
@@ -338,6 +338,24 @@ int ChooseType(RenWin& window)
 			for (int i = 0; i < dis.size(); i++)
 				XText::Xyprintf(WindowSize.x / 100 + BarW * 1.3, BarH * 0.5 + UISpace * i * 1.3, dis[i], temp);
 		}
+		if (choose == 2)
+		{
+			static vector<wstring> dis = {
+				L"使用QR码保存板书",
+				L"使用手机扫描显示的二维码",
+				L"适合快捷保存和共享板书内容"
+			};
+
+			XText::SetFontConfig(Color::White, FONTSIZE);
+			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
+
+			int y = BarH * 0.5;
+			for (int i = 0; i < dis.size(); i++)
+			{
+				XText::Xyprintf(WindowSize.x / 100 + BarW * 1.3, y, dis[i], temp);
+				y += UISpace * 1.3;
+			}
+		}
 
 		if (XMsg::IsClose(temp))
 		{
@@ -357,35 +375,53 @@ void EnterSaveOrOpen(RenWin& window)
 {
 	NeedEnterSave = false;
 
-	HWND FHWND = window.getNativeHandle();
-	Path path =
-		XFile::Pick::PickFolder(
-			L"选择要保存的位置",
-			XFile::GetDir::Desktop().wstring(), FHWND);
+	int choose = ChooseType(window);
 
-	wstring P = path.wstring();
-
-	if (!P.empty())
+	if (choose == 0)
 	{
+		HWND FHWND = window.getNativeHandle();
+		Path path =
+			XFile::Pick::PickFolder(
+				L"选择要保存的位置",
+				XFile::GetDir::Desktop().wstring(), FHWND);
 
-		int choose = ChooseType(window);
+		wstring P = path.wstring();
 
-		if(choose == 0)
+		if (!P.empty())
 		{
-			wstring P = XFile::GetDir::Desktop().wstring() + L"\\"
+			wstring P2 = path.wstring() + L"\\"
 				+ to_wstring(XTime::GetTimeNow_Day()) + L"日" + to_wstring(XTime::GetTimeNow_Hour()) + L"时"
 				+ to_wstring(XTime::GetTimeNow_Min()) + L"分" + L"板书";
 
-			WriteFile::Save(P,L"mwf");
+			WriteFile::Save(window, P2, L"mwf");
 		}
-		if (choose == 1)
+	}
+	if (choose == 1)
+	{
+		HWND FHWND = window.getNativeHandle();
+		Path path =
+			XFile::Pick::PickFolder(
+				L"选择要保存的位置",
+				XFile::GetDir::Desktop().wstring(), FHWND);
+
+		wstring P = path.wstring();
+
+		if (!P.empty())
 		{
-			wstring P = XFile::GetDir::Desktop().wstring() + L"\\"
+			wstring P2 = path.wstring() + L"\\"
 				+ to_wstring(XTime::GetTimeNow_Day()) + L"日" + to_wstring(XTime::GetTimeNow_Hour()) + L"时"
 				+ to_wstring(XTime::GetTimeNow_Min()) + L"分" + L"板书";
 
-			WriteFile::Save(P,L"png");
+			WriteFile::Save(window, P2, L"png");
 		}
+	}
+	if (choose == 2)
+	{
+		XFile::CreateDirectory(L"Share");
+
+		wstring P = filesystem::current_path().wstring() + L"\\Share";
+
+		WriteFile::Save(window, P, L"qr");
 	}
 
 	XMsg::ClearMsg();
@@ -4347,7 +4383,7 @@ class TagBox_Camera
 		WriteCamera::PhotoImage();
 	}
 
-	void Set()
+	void QRCamera()
 	{
 
 	}
@@ -4422,7 +4458,7 @@ public:
 			}
 
 			//图标初始化
-			wstring ImgNameMore[5] = { L"Photo.dll",L"AutoPhoto.dll",L"Rote.dll",L"Images.dll",L"Setting.dll"};
+			wstring ImgNameMore[5] = { L"Photo.dll",L"AutoPhoto.dll",L"Rote.dll",L"Images.dll",L"QRCamera.dll"};
 
 			for(int i = 0;i < 5;i++)
 			{
@@ -4506,7 +4542,7 @@ public:
 					XText::SetFontConfig(Color::White, FONTSIZE);
 					for (int i = 0;i < 5;i++)
 					{
-						static wstring name[5] = { L"拍照",L"自动拍照",L"旋转",L"相册",L"展台设置"};
+						static wstring name[5] = { L"拍照",L"自动拍照",L"旋转",L"相册",L"手机投屏"};
 
 						if (Write::Page > 0) name[0] = L"返回展台";
 						else name[0] = L"拍照";
@@ -4593,7 +4629,7 @@ public:
 						//设置
 						if (i == 4)
 						{
-							Set();
+							QRCamera();
 						}
 
 						MoreIconScale[i].SetAnimationStartValue(30);
@@ -4668,9 +4704,6 @@ bool IsInCamera()
 }
 
 #pragma endregion
-
-
-
 
 #pragma endregion
 

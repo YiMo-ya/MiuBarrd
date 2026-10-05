@@ -54,9 +54,6 @@
     <ClCompile Include="Set.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="CameraQR.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="Camera.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -70,6 +67,12 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="Error.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="QR\qrcodegen.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ShareFile.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
@@ -116,9 +119,6 @@
     <ClInclude Include="Set.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="CameraQR.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
     <ClInclude Include="Camera.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -132,6 +132,12 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="Error.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="QR\qrcodegen.hpp">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ShareFile.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

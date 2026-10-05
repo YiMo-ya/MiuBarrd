@@ -58,7 +58,7 @@ public:
 class WriteFile
 {
 public:
-	static void Save(std::wstring path,std::wstring ExtName = L"png");
+	static void Save(RenWin& window,std::wstring path,std::wstring ExtName = L"png");
 	static void Load(std::wstring path);
 };
 

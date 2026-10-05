@@ -354,7 +354,7 @@ void App(RenWin& window)
 	XSystem::Taskbar::SetTaskBarVisible(true);
 }
 
-void SetWindowClassIconFromExe(sf::Window& window, int resId = 1)
+static void SetWindowClassIconFromExe(sf::Window& window, int resId = 1)
 {
 	HWND hwnd = static_cast<HWND>(window.getNativeHandle());
 	HINSTANCE hInst = GetModuleHandle(nullptr);
