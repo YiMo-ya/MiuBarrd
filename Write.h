@@ -65,7 +65,7 @@ public:
 class WriteCamera
 {
 public:
-	static bool EnableWriteCamera,EnableAutoPhoto;
+	static bool EnableWriteCamera,EnableAutoPhoto,EnableShareCamera;
 
 	static void Start();
 	static void Stop();
@@ -77,6 +77,7 @@ public:
 	static void Rote();
 
 	static void ManageAutoPhoto();
+	static void ManageShareCamera(RenWin& window);
 
 	/// <summary>
 	/// 获取指定相册页的照片图像。

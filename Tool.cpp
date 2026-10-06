@@ -4383,9 +4383,9 @@ class TagBox_Camera
 		WriteCamera::PhotoImage();
 	}
 
-	void QRCamera()
+	void QRCamera(RenWin& window)
 	{
-
+		WriteCamera::ManageShareCamera(window);
 	}
 
 	//打开相册照片预览面板
@@ -4429,7 +4429,7 @@ public:
 
 	void Draw(RenWin& window)
 	{
-		static IMAGE CameraIcon,CloseCameraIcon,CloseAutoIcon;
+		static IMAGE CameraIcon,CloseCameraIcon,CloseAutoIcon,CloseShareCamera;
 		static IMAGE IconMore[5];
 
 		//初始化
@@ -4455,6 +4455,13 @@ public:
 			if (!LoadIcon(CloseAutoIcon, ImgPath + L"Camera\\" + ImgName3))
 			{
 				RightMessage::ShowMessage(L"错误：定位图像CloseAutoPhoto失败，使用默认图标", L"图标加载", RightMessageType_ERROR, true);
+			}
+
+			wstring ImgName4 = L"CloseQRCamera.dll";
+
+			if (!LoadIcon(CloseShareCamera, ImgPath + L"Camera\\" + ImgName4))
+			{
+				RightMessage::ShowMessage(L"错误：定位图像CloseQRCamera失败，使用默认图标", L"图标加载", RightMessageType_ERROR, true);
 			}
 
 			//图标初始化
@@ -4550,13 +4557,25 @@ public:
 						if (WriteCamera::EnableAutoPhoto) name[1] = L"关闭自动拍照";
 						else name[1] = L"自动拍照";
 
+						if (WriteCamera::EnableShareCamera) name[4] = L"关闭手机投屏";
+						else name[4] = L"手机投屏";
+
 						float SubScale = MoreIconScale[i].value / 100.0;
 
 						if(i != 1 || !WriteCamera::EnableAutoPhoto)
 						{
-							XImage::PutScaleImage(
-								IconMore[i], BasicSize * (i + 1) + BasicSize / 2, BasicSize / 2 + MoreIconOffsetY[i].value,
-								Scale * SubScale, Scale * SubScale, rt, 0.5, 0.5);
+							if (i != 4 || !WriteCamera::EnableShareCamera)
+							{
+								XImage::PutScaleImage(
+									IconMore[i], BasicSize * (i + 1) + BasicSize / 2, BasicSize / 2 + MoreIconOffsetY[i].value,
+									Scale * SubScale, Scale * SubScale, rt, 0.5, 0.5);
+							}
+							else
+							{
+								XImage::PutScaleImage(
+									CloseShareCamera, BasicSize* (i + 1) + BasicSize / 2, BasicSize / 2 + MoreIconOffsetY[i].value,
+									Scale* SubScale, Scale* SubScale, rt, 0.5, 0.5);
+							}
 						}
 						else
 						{
@@ -4629,7 +4648,7 @@ public:
 						//设置
 						if (i == 4)
 						{
-							QRCamera();
+							QRCamera(window);
 						}
 
 						MoreIconScale[i].SetAnimationStartValue(30);

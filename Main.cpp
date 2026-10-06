@@ -11,6 +11,7 @@
 #include "Update.h"
 #include "Error.h"
 #include <dbghelp.h>
+#include <iostream>
 #pragma comment(lib, "dbghelp.lib")
 
 NOXS; NOSTD;
@@ -424,6 +425,7 @@ static bool SetForeWindow(HWND hWnd)
 
 int main()
 {
+	
 	//打开检测
 	HWND hwnd = FindWindowW(NULL, L"MiuBarrd");
 	if (IsWindow(hwnd))

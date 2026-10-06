@@ -1,4 +1,5 @@
-﻿#include "ShareFile.h"
+﻿#include "ShareCamera.h"
+#include "ShareFile.h"
 #include "Write.h"
 #include "Tool.h"
 #include "Shared.h"
@@ -343,6 +344,7 @@ Color ChooseColorWindow(const Color& cancelColor, RenderWindow& window)
 //启用展台
 bool WriteCamera::EnableWriteCamera = false;
 bool WriteCamera::EnableAutoPhoto = false;
+bool WriteCamera::EnableShareCamera = false;
 
 bool FlushWriteLayer = false;
 
@@ -5132,7 +5134,6 @@ static void SetWindowClassIconFromExe(sf::Window& window, int resId = 1)
 
 #pragma endregion
 
-IMAGE QRImg;
 void ShowQR(IMAGE& img,RenWin& window, ShareFile& Share)
 {
 	RenWin QRWindow;
@@ -5397,6 +5398,123 @@ void WriteFile::Load(wstring path)
 
 #pragma endregion
 
+//共享展台
+#pragma region MyRegion
+
+ShareCamera ShareCameraA;
+
+void ShowShareCameraQR(IMAGE& img, RenWin& window, ShareCamera& Share)
+{
+	RenWin QRWindow;
+	XWindow::CreateGraphWindow(QRWindow, -1, -1, WindowSize.x / 2, WindowSize.y / 2, L"手机投屏", Style::Titlebar | Style::Close);
+	XWindow::DWM::SetWindowTitleBarColor(QRWindow, XWindow::GetBackGroundColor());
+	XWindow::DWM::SetWindowBorderColor(QRWindow, User::MainColor);
+	XWindow::RemoveWindowStyle(QRWindow, WS_MAXIMIZEBOX);
+	XWindow::RemoveWindowStyle(QRWindow, WS_MINIMIZEBOX);
+
+	//置顶窗口
+	SetWindowLongPtrW(QRWindow.getNativeHandle(), GWL_EXSTYLE,
+		WS_EX_TOPMOST);
+	SetWindowPos(QRWindow.getNativeHandle(), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
+	static float Scale = WindowSize.x / 5 / (float)img.w;
+
+	while (XMsg::IsOpen(QRWindow))
+	{
+		XWindow::DelayFps(QRWindow);
+
+		XText::SetFontAdjust(ADJUST_LEFT, ADJUST_TOP);
+		XText::SetFontConfig(Color::White, FONTSIZE);
+		static int tipx = WindowSize.x / 100, tipy = WindowSize.x / 100;
+		XText::Xyprintf(tipx, tipy, L"使用手机的任意QR码扫描器扫描此QR码以实现投屏。", QRWindow);
+
+		XImage::PutScaleImage(img, WindowSize.x / 4, WindowSize.y / 4, Scale, Scale, QRWindow, 0.5, 0.5);
+
+		XGraph::SetColor(User::MainColor);
+		static int w = WindowSize.x / 5, h = WindowSize.x / 5;
+		static int lw = WindowSize.x / 200;
+		static int r = WindowSize.x / 200;
+		XGraph::LineShape::SetLineWidth(lw);
+		XGraph::RectangleShape::RoundRect(WindowSize.x / 4 - w / 2, WindowSize.y / 4 - h / 2, w, h, r, QRWindow);
+
+		if (!Share.isRunning())
+		{
+			Message::ShowMessage("网络配置错误。", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
+			XWindow::SetBackGroundColor(Color(30, 30, 30));
+
+			break;
+		}
+	}
+
+	XMsg::ResetCloseMsg();
+	XMsg::ClearMsg();
+	XMsg::UpdateMsg(window);
+}
+
+void WriteCamera::ManageShareCamera(RenWin& window)
+{
+	EnableShareCamera = !EnableShareCamera;
+
+	if(EnableShareCamera)
+	{
+		ShareCameraA.Init(9000);
+
+		if (!ShareCameraA.start())
+		{
+			EnableShareCamera = false;
+
+			BottomMessage::AddMessage(301, L"无法打开手机投屏", BottomMessageType_ERROR);
+			RightMessage::ShowMessage(L"无法打开手机投屏", L"手机投屏", RightMessageType_ERROR, true);
+
+			HWND hWnd = FindWindowW(NULL, L"MiuBarrdLoader");
+			if (IsWindow(hWnd))
+			{
+				// 发送关闭消息
+				SendMessageW(hWnd, WM_CLOSE, 0, 0);
+			}
+		}
+		else
+		{
+			while (!ShareCameraA.isRunning())
+			{
+				::Sleep(10);
+			}
+
+			IMAGE QR;
+
+			QR.texture = ShareCameraA.getQRTexture(8, 1);
+			Vector2u Size = QR.texture.getSize();
+			QR.w = int(Size.x);
+			QR.h = int(Size.y);
+
+			if (QR.w > 0 && QR.h > 0)
+			{
+				HWND hWnd = FindWindowW(NULL, L"MiuBarrdLoader");
+				if (IsWindow(hWnd))
+				{
+					// 发送关闭消息
+					SendMessageW(hWnd, WM_CLOSE, 0, 0);
+				}
+
+				ShowShareCameraQR(QR, window, ShareCameraA);
+			}
+			else
+			{
+				Message::ShowMessage("转换QR码失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
+				XWindow::SetBackGroundColor(Color(30, 30, 30));
+			}
+
+		}
+	}
+	else
+	{
+		ShareCameraA.requestExitCamera();
+		ShareCameraA.stop();
+	}
+}
+#pragma endregion
+
+
 //展台
 #pragma region MyRegion
 
@@ -5427,7 +5545,6 @@ void WriteCamera::Start()
 
 		BottomMessage::AddMessage(301, L"无法打开视频展台", BottomMessageType_ERROR);
 		RightMessage::ShowMessage(L"无法打开视频展台", L"视频展台", RightMessageType_ERROR, true);
-		RightMessage::ShowMessage(L"无法打开视频展台", L"视频展台", RightMessageType_ERROR, true);
 	}
 	else
 	{
@@ -5452,9 +5569,23 @@ void WriteCamera::Draw(RenWin& window)
 	float dx = (pd.CameraPos.x + WW) * Scale;
 	float dy = (pd.CameraPos.y + WH) * Scale;
 
-	CameraManager::DrawCameraImage(
-		dx,dy, Scale,
-		window);
+	if(!EnableShareCamera)
+	{
+		CameraManager::DrawCameraImage(
+			dx, dy, Scale,
+			window);
+	}
+	else
+	{
+		static IMAGE img;
+
+		ShareCameraA.updateTexture(img.texture);
+		Vector2u Size = img.texture.getSize();
+		img.w = int(Size.x);
+		img.h = int(Size.y);
+
+		XImage::PutScaleImage(img, dx, dy, Scale, Scale, window, 0.5, 0.5);
+	}
 
 	if (CameraManager::NeedAutoPhoto()) PhotoImage();
 
