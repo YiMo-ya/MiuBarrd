@@ -227,7 +227,7 @@ void EnterSetting(RenWin& window)
 	int RowW = BarW * 0.84;
 
 	//每行入场动画：从下滑入 + 淡入
-	const int RowCount = 5;
+	const int RowCount = 7;
 	EV RowOffset[RowCount];
 	EV RowAlpha[RowCount];
 	for (int i = 0; i < RowCount; i++)
@@ -241,7 +241,7 @@ void EnterSetting(RenWin& window)
 	//控件动画
 	EV AAKnobScale;
 	AAKnobScale.SetAnimationStartValue(100);
-	ToggleState FixShapeKnob, WriteAdjustKnob, AnimationKnob, ExpKnob;
+	ToggleState FixShapeKnob, WriteAdjustKnob, AnimationKnob, ExpKnob,ExpBack;
 
 
 	//颜色块缩放动画
@@ -438,6 +438,26 @@ void EnterSetting(RenWin& window)
 			if (on != User::EnableExpTool)
 			{
 				User::EnableExpTool = on;
+				Apply();
+			}
+		}
+		y += RowH;
+
+		//7. 背景光效
+		{
+			int ox = (int)RowOffset[5].value;
+			int alpha = (int)RowAlpha[5].value;
+
+			XText::SetFontConfig(Color(255, 255, 255, alpha), FONTSIZE * 1.2);
+			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
+			XText::Xyprintf(RowX, y + RowH / 2 + ox, L"启用背景光效", window);
+
+			int bw = RowH * 0.8, bh = RowH * 0.4;
+			int bx = RowX + RowW * 0.72;
+			bool on = DrawSwitch(bx, y + RowH / 2 - bh / 2 + ox, bw, bh, User::EnableBack, ExpBack, window);
+			if (on != User::EnableBack)
+			{
+				User::EnableBack = on;
 				Apply();
 			}
 		}

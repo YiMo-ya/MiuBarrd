@@ -78,6 +78,93 @@ wstring GetFileExtension(const wstring& path)
 	return path.substr(dot + 1);
 }
 
+//圆角化RenderTexture
+#pragma region MyRegion
+
+// 圆角矩形的片元着色器（GLSL 1.10，SFML 默认版本）
+//
+// 使用符号距离场（SDF）判定每个像素到「内缩半径后的矩形」的距离：
+//   d < 0  在圆角矩形内部
+//   d > 0  在圆角矩形外部（需要擦除）
+// 用 smoothstep 在 1px 范围内做过渡，得到抗锯齿的边缘 alpha。
+//
+// uniforms:
+//   texture  : 源纹理（RenderTexture 的内容）
+//   size     : 纹理像素尺寸
+//   radius   : 圆角半径（像素）
+static const char* ROUND_RECT_FRAG =
+R"(
+uniform sampler2D texture;
+uniform float radius;
+
+void main()
+{
+    vec2 uv = gl_TexCoord[0].xy;
+    vec2 size = vec2(textureSize(texture, 0)); // 仅 GLSL 1.30+
+    vec2 p = uv * size;
+
+    vec2 halfSize = size * 0.5 - vec2(radius);
+    vec2 q = abs(p - size * 0.5) - halfSize;
+    float dist = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+
+    float aa = 1.0 - smoothstep(-1.0, 1.0, dist);
+
+    vec4 color = texture2D(texture, uv);
+    gl_FragColor = vec4(color.rgb, color.a * aa);
+}
+)";
+
+// 把 RenderTexture 中「圆角矩形之外」的像素擦成透明（着色器版）。
+//
+// 调用约定：必须在 rt.display() 之后调用！
+//   着色器需要采样 rt 的当前内容，而纹理只有在 display() 之后才被填充，
+//   因此调用点应放在 display() 之后、绘制 Sprite 之前。
+//
+// 参数 rt: 目标渲染纹理（内容会被就地修改为圆角矩形）
+// 参数 r : 圆角半径（像素），越界时自动收敛到 [1, min(w,h)/2]
+void RoundRenderTexture(sf::RenderTexture& rt, int r)
+{
+	const sf::Vector2u size = rt.getSize();
+	if (size.x == 0 || size.y == 0)
+		return;
+
+	// r 越界会导致圆角退化或图形溢出，先限制到合理范围
+	const int maxR = static_cast<int>(size.x < size.y ? size.x : size.y) / 2;
+	if (r <= 0)
+		return;
+	if (r > maxR)
+		r = maxR;
+
+	// 着色器只在首次调用时加载，避免每帧重复编译
+	static sf::Shader shader;
+	static bool shaderReady = false;
+	if (!shaderReady)
+	{
+		if (!shader.loadFromMemory(ROUND_RECT_FRAG, sf::Shader::Type::Fragment))
+			return; // 加载失败则保持原样，不破坏内容
+		shaderReady = true;
+	}
+
+	// 防自采样：不能同时把同一张纹理作为输入和渲染目标。
+	// 先把当前内容拷到临时纹理 copy，再从 copy 采样绘制回 rt。
+	sf::RenderTexture copy({ size.x, size.y });
+	copy.clear(sf::Color::Transparent);
+	copy.draw(sf::Sprite(rt.getTexture()));
+	copy.display();
+
+	shader.setUniform("texture", copy.getTexture());
+	shader.setUniform("size", sf::Glsl::Vec2(static_cast<float>(size.x), static_cast<float>(size.y)));
+	shader.setUniform("radius", static_cast<float>(r));
+
+	// 用着色器把 copy 重新画回 rt：圆角外被乘性擦除成透明
+	rt.clear(sf::Color::Transparent);
+	rt.draw(sf::Sprite(copy.getTexture()), &shader);
+	rt.display();
+}
+
+
+#pragma endregion
+
 #pragma endregion
 
 int Tool::ToolCount = 0;
@@ -108,6 +195,15 @@ const Color PersetPenColor[15] = {
 	Color(240,90,230)
 };
 
+//背景圆
+struct BackRound
+{
+	int x, y, r, a;
+};
+static const int BACKROUND_R_SPEED = 8;
+static const int BACKROUND_ALPHA_SPEED = 3;
+static const int BACKROUND_STARTALPHA = 200;
+
 //UI
 #pragma region MyRegion
 
@@ -133,10 +229,6 @@ static int MinFrame;
 
 static void UpdateMoreBarVisible();
 static void UpdatePageBar();
-
-//页面选择器
-bool NeedEnterChoosePage = false;
-void EnterChoosePage(RenWin& window);
 
 //导入管理
 #pragma region MyRegion
@@ -566,6 +658,68 @@ public:
 		L"软笔",L"橡皮擦",L"移动缩放",L"撤销",L"更多插件"
 	};
 
+	void DrawBack(RenWin& window)
+	{
+		static RenderTexture rtb;
+
+		static Vector2i TempSize;
+		if(TempSize.x != size.x.value + 2 || TempSize.y != size.y.value + 2)
+		{
+			rtb.resize(FTU({ size.x.value + 2,size.y.value + 2 }));
+
+			TempSize = { (int)size.x.value,(int)size.y.value };
+		}
+
+		static vector<BackRound> BackRound_;
+
+		rtb.clear(Color::Transparent);
+
+		if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft) && Tool::IsInBar)
+		{
+			static Vector2i MousePosTemp;
+			Vector2i MousePos = XMsg::MouseMsg::GetMousePosWindow();
+
+			//坐标不等，添加
+			if (MousePosTemp.x != MousePos.x || MousePosTemp.y != MousePos.y)
+			{
+				BackRound_.push_back({ MousePos.x,MousePos.y,0,BACKROUND_STARTALPHA});
+			}
+		}
+
+		for (int i = 0 ;i < BackRound_.size();i++)
+		{
+			auto& back = BackRound_[i];
+			static int Speed = BACKROUND_R_SPEED * ScreenScale;
+			back.r += Speed;
+			if (back.a - BACKROUND_ALPHA_SPEED > 0) back.a -= BACKROUND_ALPHA_SPEED;
+			else
+			{
+				swap(BackRound_[i], BackRound_.back());
+				BackRound_.pop_back();
+
+				i -= 1;
+				continue;
+			}
+
+			Color FillColor = User::MainColor;
+			FillColor.a = back.a;
+			XGraph::SetFillColor(FillColor);
+			int Drawx = back.x - pos.x.value + 1 + size.x.value * CenterX, Drawy = back.y - pos.y.value + 1 + size.y.value * CenterY;
+			XGraph::CircleShape::FillCircle_WithoutBorder(Drawx, Drawy, back.r, rtb);
+		}
+
+		rtb.display();
+
+		RoundRenderTexture(rtb, RoundSize);
+
+		Sprite s(rtb.getTexture());
+
+		s.setPosition({ pos.x.value - 1 - size.x.value * CenterX,pos.y.value - 1 - size.y.value * CenterY });
+		s.setColor(Color(255, 255, 255, UIAlpha));
+		s.setScale(Vector2f(1, yScale.value / 100.0));
+		window.draw(s);
+	}
+
 	void Draw(RenWin& window)
 	{
 		//图标
@@ -908,6 +1062,8 @@ public:
 		}
 
 		if(pos.y.frame > MinFrame) yScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
+
+		if(User::EnableBack) DrawBack(window);
 
 		Sprite s(rt.getTexture());
 		
@@ -1831,6 +1987,66 @@ public:
 
 	float CenterX = 0.5, CenterY = 0;
 
+	void DrawBack(RenWin& window)
+	{
+		static RenderTexture rtb;
+
+		static Vector2i TempSize;
+		if (TempSize.x != size.x.value + 2 || TempSize.y != size.y.value + 2)
+		{
+			rtb.resize(FTU({ size.x.value + 2,size.y.value + 2 }));
+
+			TempSize = { (int)size.x.value,(int)size.y.value };
+		}
+
+		static vector<BackRound> BackRound_;
+
+		rtb.clear(Color::Transparent);
+
+		if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft) && Tool::IsInBar)
+		{
+			static Vector2i MousePosTemp;
+			Vector2i MousePos = XMsg::MouseMsg::GetMousePosWindow();
+
+			//坐标不等，添加
+			if (MousePosTemp.x != MousePos.x || MousePosTemp.y != MousePos.y)
+			{
+				BackRound_.push_back({ MousePos.x,MousePos.y,0,BACKROUND_STARTALPHA});
+			}
+		}
+
+		for (int i = 0; i < BackRound_.size(); i++)
+		{
+			auto& back = BackRound_[i];
+			static int Speed = BACKROUND_R_SPEED * ScreenScale;
+			back.r += Speed;
+			if (back.a - BACKROUND_ALPHA_SPEED > 0) back.a -= BACKROUND_ALPHA_SPEED;
+			else
+			{
+				swap(BackRound_[i], BackRound_.back());
+				BackRound_.pop_back();
+
+				i -= 1;
+				continue;
+			}
+
+			Color FillColor = User::MainColor;
+			FillColor.a = back.a;
+			XGraph::SetFillColor(FillColor);
+			int Drawx = back.x - pos.x.value + 1 + size.x.value * CenterX, Drawy = back.y - pos.y.value + 1 + size.y.value * CenterY;
+			XGraph::CircleShape::FillCircle_WithoutBorder(Drawx, Drawy, back.r, rtb);
+		}
+
+		rtb.display();
+		RoundRenderTexture(rtb, RoundSize);
+
+		Sprite s(rtb.getTexture());
+
+		s.setPosition({ pos.x.value - 1 - size.x.value * CenterX,pos.y.value - 1 - size.y.value * CenterY });
+		s.setColor(Color(255, 255, 255, UIAlpha));
+		window.draw(s);
+	}
+
 	void Draw(RenWin& window)
 	{
 		if (!NeedReDraw)
@@ -1878,6 +2094,8 @@ public:
 		{
 			Tool::IsInBar = true;
 		}
+
+		if(User::EnableBack) DrawBack(window);
 
 		Sprite s(rt.getTexture());
 		
@@ -2222,240 +2440,6 @@ void EnterGeometricLibrary(RenWin& window)
 
 #pragma endregion
 
-//页面选择器
-#pragma region MyRegion
-
-void EnterChoosePage(RenWin& window)
-{
-	NeedEnterChoosePage = false;
-
-	return;
-
-	IMAGE temp;
-	XImage::NewImage(window, temp);
-
-	static int BarW = BasicSize * 10, BarH = BasicSize * 6;
-	static int BarX = WindowSize.x / 2 - BarW / 2;
-
-	EV BarY;
-	BarY.SetAnimationStartValue(WindowSize.y);
-	BarY.SetAnimation(WindowSize.y - BarH - BasicSize - UISpace * 2, TotalFrame);
-	EV BackAlpha;
-	BackAlpha.SetAnimationStartValue(255);
-	BackAlpha.SetAnimation(50, TotalFrame);
-
-	//缩略图尺寸
-	static int ThumbW = BasicSize * 1.6, ThumbH = BasicSize * 1.2;
-	static int ThumbSpace = UISpace;
-
-	//每页缩略图纹理
-	vector<RenderTexture> thumbs;
-	thumbs.resize(Write::TotalPage);
-	for (int i = 0; i < Write::TotalPage; i++)
-	{
-		thumbs[i] = RenderTexture(Vector2u(ThumbW, ThumbH));
-		Write::GetPageThumbnail(i, thumbs[i]);
-	}
-
-	//竖向列表布局：每行一个缩略图
-	int rowH = ThumbH + ThumbSpace + FONTSIZE;
-
-	//内容可视区域
-	int viewX = BarX + BarW * 0.05;
-	int viewY = BarY.end + BarH * 0.18;
-	int viewW = BarW * 0.9;
-	int viewH = BarH * 0.78;
-
-	//内容总高度
-	int contentH = Write::TotalPage * rowH;
-	int maxScroll = max(0, contentH - viewH);
-
-	//滚动偏移
-	float scroll = 0;
-	//滚动惯性速度
-	float scrollVel = 0;
-	//是否正在拖动列表
-	bool dragging = false;
-	float dragStartY = 0, dragStartScroll = 0;
-	//拖动判定阈值
-	bool dragMoved = false;
-
-	bool NeedExit = false;
-
-	while (!XMsg::IsClose(window) && !NeedExit)
-	{
-		XWindow::DelayFps(window,60);
-
-		BarY.UpdateAnimation(XEase::EaseBasic::easeOut, 6);
-		BackAlpha.UpdateAnimation(XEase::EaseBasic::linear);
-
-		//滚动惯性
-		if (!dragging)
-		{
-			scroll += scrollVel;
-			scrollVel *= 0.9;
-			if (fabs(scrollVel) < 0.1) scrollVel = 0;
-		}
-		if (scroll < 0) { scroll = 0; scrollVel = 0; }
-		if (scroll > maxScroll) { scroll = (float)maxScroll; scrollVel = 0; }
-
-		//滚轮
-		int wheel = XMsg::Composite::GetMouseRectWheel(viewX, viewY, viewW, viewH);
-		if (wheel != 0)
-		{
-			scroll -= wheel / 120.0 * BasicSize * 0.5;
-			if (scroll < 0) scroll = 0;
-			if (scroll > maxScroll) scroll = (float)maxScroll;
-		}
-
-		//拖动列表
-		if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft))
-		{
-			if (!dragging && XMsg::MouseMsg::IsMouseIn(viewX, viewY, viewW, viewH))
-			{
-				dragging = true;
-				dragMoved = false;
-				dragStartY = (float)XMsg::MouseMsg::GetMousePosWindow().y;
-				dragStartScroll = scroll;
-			}
-		}
-		if (dragging)
-		{
-			if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft))
-			{
-				float dy = (float)XMsg::MouseMsg::GetMousePosWindow().y - dragStartY;
-				if (fabs(dy) > BasicSize * 0.1) dragMoved = true;
-
-				scroll = dragStartScroll - dy;
-				if (scroll < 0) scroll = 0;
-				if (scroll > maxScroll) scroll = (float)maxScroll;
-
-				//记录速度用于惯性
-				scrollVel = -dy * 0.15;
-			}
-			else
-			{
-				dragging = false;
-			}
-		}
-
-		//绘制背景
-		temp.color.a = BackAlpha.value;
-		XImage::PutImage(temp, 0, 0, window);
-
-		//绘制底色
-		XGraph::SetFillColor(Color(50, 50, 50, 100));
-		XGraph::RectangleShape::FillRoundRect_WithoutBorder(BarX, BarY.value, BarW, BarH, RoundSize, window);
-		DrawGlassBar(BarX, BarY.value, BarW, BarH, RoundSize, window);
-
-		//标题
-		XText::SetFontConfig(Color::White, FONTSIZE);
-		XText::SetFontAdjust(ADJUST_CENTER, ADJUST_TOP);
-		XText::Xyprintf(BarX + BarW / 2, BarY.value + BarH * 0.05, "选择页面", window);
-
-		//裁剪可视区域
-		View view(FloatRect(Vector2f((float)viewX, (float)viewY), Vector2f((float)viewW, (float)viewH)));
-		window.setView(view);
-
-		//绘制竖向缩略图列表
-		for (int i = 0; i < Write::TotalPage; i++)
-		{
-			int x = viewX;
-			int y = viewY + i * rowH - (int)scroll;
-
-			//跳过不可见项
-			if (y + rowH < viewY || y > viewY + viewH) continue;
-
-			//当前页高亮
-			if (i == Write::Page)
-			{
-				XGraph::SetColor(User::MainColor);
-				XGraph::LineShape::SetLineWidth(WindowSize.x / 400);
-				XGraph::RectangleShape::Rect(x - 2, y - 2, ThumbW + 4, ThumbH + 4, window);
-			}
-
-			//绘制缩略图
-			Sprite s(thumbs[i].getTexture());
-			s.setPosition(Vector2f((float)x, (float)y));
-			window.draw(s);
-
-			//页码
-			XText::SetFontConfig(Color::White, FONTSIZE * 0.7);
-			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
-			XText::Xyprintf(x + ThumbW + ThumbSpace, y + ThumbH / 2, L"第" + to_wstring(i + 1) + L"页", window);
-
-			//点击跳转（未发生拖动时）
-			if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft) && !dragMoved)
-			{
-				if (XMsg::MouseMsg::IsMouseIn(x, y, ThumbW, ThumbH))
-				{
-					Write::GoToPage(i);
-					UpdatePageBar();
-					NeedExit = true;
-				}
-			}
-		}
-
-		//恢复视图
-		window.setView(window.getDefaultView());
-
-		//绘制滚动条
-		if (maxScroll > 0)
-		{
-			int barW = WindowSize.x / 300;
-			int barX = BarX + BarW - barW * 2;
-			int barTrackH = viewH;
-			int barH = max(BasicSize * 0.5, barTrackH * viewH / contentH);
-			int barY = viewY + (barTrackH - barH) * scroll / maxScroll;
-
-			XGraph::SetFillColor(Color(255, 255, 255, 40));
-			XGraph::RectangleShape::FillRoundRect_WithoutBorder(barX, viewY, barW, barTrackH, barW / 2, window);
-
-			XGraph::SetFillColor(Color(255, 255, 255, 120));
-			XGraph::RectangleShape::FillRoundRect_WithoutBorder(barX, barY, barW, barH, barW / 2, window);
-		}
-
-		//回收
-		if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft))
-		{
-			if (!XMsg::MouseMsg::IsMouseIn(BarX, BarY.value, BarW, BarH))
-			{
-				break;
-			}
-		}
-	}
-
-
-	BarY.SetAnimation(WindowSize.y, TotalFrame);
-	BackAlpha.SetAnimation(255, TotalFrame);
-
-	while (!XMsg::IsClose(window))
-	{
-		XWindow::DelayFps(window,60);
-
-		BarY.UpdateAnimation(XEase::EaseBasic::easeOut, 6);
-		BackAlpha.UpdateAnimation(XEase::EaseBasic::linear);
-
-		temp.color.a = BackAlpha.value;
-		XImage::PutImage(temp, 0, 0, window);
-
-		if (BarY.value < WindowSize.y - BasicSize)
-		{
-			XGraph::SetFillColor(Color(50, 50, 50, 100));
-			XGraph::RectangleShape::FillRoundRect_WithoutBorder(BarX, BarY.value, BarW, BarH, RoundSize, window);
-			DrawGlassBar(BarX, BarY.value, BarW, BarH, RoundSize, window);
-		}
-
-		if (!BackAlpha.IsAnimation()) break;
-	}
-
-	XMsg::ClearMsg();
-	XMsg::SetSleepTime(10);
-}
-
-
-#pragma endregion
-
 //终端
 #pragma region MyRegion
 
@@ -2571,6 +2555,66 @@ public:
 
 	bool Visible = false;
 
+	void DrawBack(RenWin& window)
+	{
+		static RenderTexture rtb;
+
+		static Vector2i TempSize;
+		if (TempSize.x != size.x.value + 2 || TempSize.y != size.y.value + 2)
+		{
+			rtb.resize(FTU({ size.x.value + 2,size.y.value + 2 }));
+
+			TempSize = { (int)size.x.value,(int)size.y.value };
+		}
+
+		static vector<BackRound> BackRound_;
+
+		rtb.clear(Color::Transparent);
+
+		if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft) && Tool::IsInBar)
+		{
+			static Vector2i MousePosTemp;
+			Vector2i MousePos = XMsg::MouseMsg::GetMousePosWindow();
+
+			//坐标不等，添加
+			if (MousePosTemp.x != MousePos.x || MousePosTemp.y != MousePos.y)
+			{
+				BackRound_.push_back({ MousePos.x,MousePos.y,0,BACKROUND_STARTALPHA});
+			}
+		}
+
+		for (int i = 0; i < BackRound_.size(); i++)
+		{
+			auto& back = BackRound_[i];
+			static int Speed = BACKROUND_R_SPEED * ScreenScale;
+			back.r += Speed;
+			if (back.a - BACKROUND_ALPHA_SPEED > 0) back.a -= BACKROUND_ALPHA_SPEED;
+			else
+			{
+				swap(BackRound_[i], BackRound_.back());
+				BackRound_.pop_back();
+
+				i -= 1;
+				continue;
+			}
+
+			Color FillColor = User::MainColor;
+			FillColor.a = back.a;
+			XGraph::SetFillColor(FillColor);
+			int Drawx = back.x - pos.x.value + 1, Drawy = back.y - pos.y.value + 1;
+			XGraph::CircleShape::FillCircle_WithoutBorder(Drawx, Drawy, back.r, rtb);
+		}
+
+		rtb.display();
+		RoundRenderTexture(rtb, RoundSize);
+
+		Sprite s(rtb.getTexture());
+
+		s.setPosition({ pos.x.value - 1,pos.y.value - 1 });
+		s.setColor(Color(255, 255, 255, UIAlpha));
+		window.draw(s);
+	}
+
 	void Draw(RenWin& window)
 	{
 		//初始化
@@ -2668,6 +2712,8 @@ public:
 
 		//大于可视返回，跳过绘制
 		if (pos.y.value > WindowSize.y - BasicSize) return;
+
+		if(User::EnableBack) DrawBack(window);
 
 		//插件实时绘制
 		DrawGlassBar(pos.x.value, pos.y.value, size.x.value, size.y.value, RoundSize, window);
@@ -2975,6 +3021,67 @@ public:
 
 	bool Exten = false;
 
+	void DrawBack(RenWin& window)
+	{
+		static RenderTexture rtb;
+
+		static Vector2i TempSize;
+		if (TempSize.x != size.x.value + 2 || TempSize.y != size.y.value + 2)
+		{
+			rtb.resize(FTU({ size.x.value + 2,size.y.value + 2 }));
+
+			TempSize = { (int)size.x.value,(int)size.y.value };
+		}
+
+		static vector<BackRound> BackRound_;
+
+		rtb.clear(Color::Transparent);
+
+		if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft) && Tool::IsInBar)
+		{
+			static Vector2i MousePosTemp;
+			Vector2i MousePos = XMsg::MouseMsg::GetMousePosWindow();
+
+			//坐标不等，添加
+			if (MousePosTemp.x != MousePos.x || MousePosTemp.y != MousePos.y)
+			{
+				BackRound_.push_back({ MousePos.x,MousePos.y,0,BACKROUND_STARTALPHA});
+			}
+		}
+
+		for (int i = 0; i < BackRound_.size(); i++)
+		{
+			auto& back = BackRound_[i];
+			static int Speed = BACKROUND_R_SPEED * ScreenScale;
+			back.r += Speed;
+			if (back.a - BACKROUND_ALPHA_SPEED > 0) back.a -= BACKROUND_ALPHA_SPEED;
+			else
+			{
+				swap(BackRound_[i], BackRound_.back());
+				BackRound_.pop_back();
+
+				i -= 1;
+				continue;
+			}
+
+			Color FillColor = User::MainColor;
+			FillColor.a = back.a;
+			XGraph::SetFillColor(FillColor);
+			int Drawx = back.x - pos.x.value + 1, Drawy = back.y - pos.y.value + 1 + size.y.value * CenterY;
+			XGraph::CircleShape::FillCircle_WithoutBorder(Drawx, Drawy, back.r, rtb);
+		}
+
+		rtb.display();
+		RoundRenderTexture(rtb, RoundSize);
+
+		Sprite s(rtb.getTexture());
+
+		s.setPosition({ pos.x.value - 1,pos.y.value - 1 - size.y.value * CenterY });
+		s.setColor(Color(255, 255, 255, UIAlpha));
+		s.setScale(Vector2f(1, yScale.value / 100.0));
+		window.draw(s);
+	}
+
 	void Draw(RenWin& window)
 	{
 		//线条定义
@@ -3270,6 +3377,8 @@ public:
 
 		if (pos.y.frame > MinFrame) yScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
 
+		if(User::EnableBack) DrawBack(window);
+
 		Sprite s(rt.getTexture());
 		
 		s.setPosition({ pos.x.value - 1,pos.y.value - 1 - CenterY  * size.y.value});
@@ -3323,10 +3432,6 @@ class PageBar
 		Write::LastPage();
 		NeedReDraw = PerNeedReDraw = true;
 	}
-	void ChoosePage()
-	{
-		NeedEnterChoosePage = true;
-	}
 
 	void NextPage()
 	{
@@ -3347,6 +3452,66 @@ public:
 
 	float CenterX = 0, CenterY = 0;
 
+	void DrawBack(RenWin& window)
+	{
+		static RenderTexture rtb;
+
+		static Vector2i TempSize;
+		if (TempSize.x != size.x.value + 2 || TempSize.y != size.y.value + 2)
+		{
+			rtb.resize(FTU({ size.x.value + 2,size.y.value + 2 }));
+
+			TempSize = { (int)size.x.value,(int)size.y.value };
+		}
+
+		static vector<BackRound> BackRound_;
+
+		rtb.clear(Color::Transparent);
+
+		if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft) && Tool::IsInBar)
+		{
+			static Vector2i MousePosTemp;
+			Vector2i MousePos = XMsg::MouseMsg::GetMousePosWindow();
+
+			//坐标不等，添加
+			if (MousePosTemp.x != MousePos.x || MousePosTemp.y != MousePos.y)
+			{
+				BackRound_.push_back({ MousePos.x,MousePos.y,0,BACKROUND_STARTALPHA});
+			}
+		}
+
+		for (int i = 0; i < BackRound_.size(); i++)
+		{
+			auto& back = BackRound_[i];
+			static int Speed = BACKROUND_R_SPEED * ScreenScale;
+			back.r += Speed;
+			if (back.a - BACKROUND_ALPHA_SPEED > 0) back.a -= BACKROUND_ALPHA_SPEED;
+			else
+			{
+				swap(BackRound_[i], BackRound_.back());
+				BackRound_.pop_back();
+
+				i -= 1;
+				continue;
+			}
+
+			Color FillColor = User::MainColor;
+			FillColor.a = back.a;
+			XGraph::SetFillColor(FillColor);
+			int Drawx = back.x - pos.x.value + 1, Drawy = back.y - pos.y.value + 1 + size.y.value * CenterY;
+			XGraph::CircleShape::FillCircle_WithoutBorder(Drawx, Drawy, back.r, rtb);
+		}
+
+		rtb.display();
+		RoundRenderTexture(rtb, RoundSize);
+
+		Sprite s(rtb.getTexture());
+
+		s.setPosition({ pos.x.value - 1,pos.y.value - 1 - size.y.value * CenterY });
+		s.setColor(Color(255, 255, 255, UIAlpha));
+		s.setScale(Vector2f(1, yScale.value / 100.0));
+		window.draw(s);
+	}
 	void Draw(RenWin& window)
 	{
 		//文字透明度
@@ -3584,7 +3749,6 @@ public:
 							ArrowOffsetLeft.SetAnimationStartValue(-BasicSize * 0.1);
 							ArrowOffsetLeft.SetAnimation(0, TotalFrame);
 						}
-						if (i == 1) ChoosePage(); //页面选择
 					}
 					if (i == 2)
 					{
@@ -3606,6 +3770,8 @@ public:
 		}
 
 		if (pos.y.frame > MinFrame) yScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
+
+		if(User::EnableBack) DrawBack(window);
 
 		Sprite s(rt.getTexture());
 		
@@ -3988,6 +4154,66 @@ public:
 	//是否处于展开状态
 	bool IsShow() const { return IsEx; }
 
+	void DrawBack(RenWin& window)
+	{
+		static RenderTexture rtb;
+
+		static Vector2i TempSize;
+		if (TempSize.x != size.x.value + 2 || TempSize.y != size.y.value + 2)
+		{
+			rtb.resize(FTU({ size.x.value + 2,size.y.value + 2 }));
+
+			TempSize = { (int)size.x.value,(int)size.y.value };
+		}
+
+		static vector<BackRound> BackRound_;
+
+		rtb.clear(Color::Transparent);
+
+		if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft) && Tool::IsInBar)
+		{
+			static Vector2i MousePosTemp;
+			Vector2i MousePos = XMsg::MouseMsg::GetMousePosWindow();
+
+			//坐标不等，添加
+			if (MousePosTemp.x != MousePos.x || MousePosTemp.y != MousePos.y)
+			{
+				BackRound_.push_back({ MousePos.x,MousePos.y,0,BACKROUND_STARTALPHA});
+			}
+		}
+
+		for (int i = 0; i < BackRound_.size(); i++)
+		{
+			auto& back = BackRound_[i];
+			static int Speed = BACKROUND_R_SPEED * ScreenScale;
+			back.r += Speed;
+			if (back.a - BACKROUND_ALPHA_SPEED > 0) back.a -= BACKROUND_ALPHA_SPEED;
+			else
+			{
+				swap(BackRound_[i], BackRound_.back());
+				BackRound_.pop_back();
+
+				i -= 1;
+				continue;
+			}
+
+			Color FillColor = User::MainColor;
+			FillColor.a = back.a;
+			XGraph::SetFillColor(FillColor);
+			int Drawx = back.x - pos.x.value + 1, Drawy = back.y - pos.y.value + 1;
+			XGraph::CircleShape::FillCircle_WithoutBorder(Drawx, Drawy, back.r, rtb);
+		}
+
+		rtb.display();
+		RoundRenderTexture(rtb, RoundSize);
+
+		Sprite s(rtb.getTexture());
+
+		s.setPosition({ pos.x.value - 1,pos.y.value - 1 });
+		s.setColor(Color(255, 255, 255, UIAlpha));
+		window.draw(s);
+	}
+
 	void Draw(RenWin& window)
 	{
 		static IMAGE AlbumIcon;
@@ -4204,6 +4430,8 @@ public:
 
 		//与更多工具栏一致：无动画且已完全收起时跳过绘制
 		if (!IsEx && !pos.y.IsAnimation() && pos.y.value >= WindowSize.y - BasicSize) return;
+
+		if(User::EnableBack) DrawBack(window);
 
 		Sprite s(rt.getTexture());
 		
@@ -4427,6 +4655,66 @@ public:
 	EV MoreIconScale[5];
 	EV MoreIconOffsetY[5];
 
+	void DrawBack(RenWin& window)
+	{
+		static RenderTexture rtb;
+
+		static Vector2i TempSize;
+		if (TempSize.x != size.x.value + 2 || TempSize.y != size.y.value + 2)
+		{
+			rtb.resize(FTU({ size.x.value + 2,size.y.value + 2 }));
+
+			TempSize = { (int)size.x.value,(int)size.y.value };
+		}
+
+		static vector<BackRound> BackRound_;
+
+		rtb.clear(Color::Transparent);
+
+		if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft) && Tool::IsInBar)
+		{
+			static Vector2i MousePosTemp;
+			Vector2i MousePos = XMsg::MouseMsg::GetMousePosWindow();
+
+			//坐标不等，添加
+			if (MousePosTemp.x != MousePos.x || MousePosTemp.y != MousePos.y)
+			{
+				BackRound_.push_back({ MousePos.x,MousePos.y,0,BACKROUND_STARTALPHA});
+			}
+		}
+
+		for (int i = 0; i < BackRound_.size(); i++)
+		{
+			auto& back = BackRound_[i];
+			static int Speed = BACKROUND_R_SPEED * ScreenScale;
+			back.r += Speed;
+			if (back.a - BACKROUND_ALPHA_SPEED > 0) back.a -= BACKROUND_ALPHA_SPEED;
+			else
+			{
+				swap(BackRound_[i], BackRound_.back());
+				BackRound_.pop_back();
+
+				i -= 1;
+				continue;
+			}
+
+			Color FillColor = User::MainColor;
+			FillColor.a = back.a;
+			XGraph::SetFillColor(FillColor);
+			int Drawx = back.x - pos.x.value + 1 - MainToolBar.size.x.value / 2 - UISpace, Drawy = back.y - pos.y.value + 1 + size.y.value * CenterY;
+			XGraph::CircleShape::FillCircle_WithoutBorder(Drawx, Drawy, back.r, rtb);
+		}
+
+		rtb.display();
+		RoundRenderTexture(rtb, RoundSize);
+
+		Sprite s(rtb.getTexture());
+
+		s.setPosition({ pos.x.value - 1 + MainToolBar.size.x.value / 2 + UISpace,pos.y.value - 1 - CenterY * size.y.value });
+		s.setColor(Color(255, 255, 255, UIAlpha));
+		s.setScale(Vector2f(1, yScale.value / 100.0));
+		window.draw(s);
+	}
 	void Draw(RenWin& window)
 	{
 		static IMAGE CameraIcon,CloseCameraIcon,CloseAutoIcon,CloseShareCamera;
@@ -4666,6 +4954,8 @@ public:
 
 		if (pos.y.frame > MinFrame) yScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
 
+		if(User::EnableBack) DrawBack(window);
+
 		Sprite s(rt.getTexture());
 		
 		s.setPosition({ pos.x.value - 1 + MainToolBar.size.x.value / 2 + UISpace,pos.y.value - 1 - CenterY * size.y.value });
@@ -4793,7 +5083,6 @@ void Tool::Draw(RenWin& window)
 	if (NeedEnterGeometricLibrary) EnterGeometricLibrary(window);
 	if (NeedEnterTerminal) EnterTerminal(window);
 	if (NeedEnterSave) EnterSaveOrOpen(window);
-	if (NeedEnterChoosePage) EnterChoosePage(window);
 	if (NeedEnterSetting) EnterSetting(window);
 }
 

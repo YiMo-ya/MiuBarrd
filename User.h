@@ -15,6 +15,8 @@ public:
 
 	static bool EnableExpTool;
 
+	static bool EnableBack;
+
 	static void Read();
 
 	//保存配置到 User.ini

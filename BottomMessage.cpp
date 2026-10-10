@@ -43,6 +43,11 @@ void BottomMessage::AddMessage(int id,wstring text, BottomMessageType type, int 
 	y.SetAnimationStartValue(WindowSize.y);
 	y.SetAnimation(WindowSize.y - BottomMessageBoxH - UISpace * 2 - BasicSize);
 	BottomMessages.push_back({ y,text,time,time,type,id });
+
+	if (UpdateUser > 0)
+	{
+		BottomMessageColor_Border[0] = User::MainColor;
+	}
 }
 
 //处理消息

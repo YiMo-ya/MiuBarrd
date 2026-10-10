@@ -10,6 +10,7 @@ bool User::EnableFixShape = true;
 bool User::EnableWriteAdjust = true;
 bool User::EnableAnimation = true;
 bool User::EnableExpTool = true;
+bool User::EnableBack = true;
 
 void User::Read()
 {
@@ -52,6 +53,10 @@ void User::Read()
 			{
 				UserLoad >> EnableExpTool;
 			}
+			if (temp == "[BACK]")
+			{
+				UserLoad >> EnableBack;
+			}
 		}
 	}
 	else
@@ -66,7 +71,8 @@ void User::Read()
 			<< "[FIXSHAPE] " << to_string(EnableFixShape ? 1 : 0) << endl
 			<< "[ADJUST] " << to_string(EnableWriteAdjust ? 1 : 0) << endl
 			<< "[ANIMATION] " << to_string(EnableAnimation ? 1 : 0) << endl
-			<< "[EXP] " << to_string(EnableExpTool ? 1 : 0) << endl;;
+			<< "[EXP] " << to_string(EnableExpTool ? 1 : 0) << endl
+			<< "[BACK] " << to_string(EnableBack ? 1 : 0) << endl;
 
 		UserSave.close();
 	}
