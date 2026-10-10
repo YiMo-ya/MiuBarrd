@@ -403,6 +403,22 @@ struct UnDoStack
 {
 	int Index;
 	vector<WriteData> UnDoData;
+
+	// 整页快照：清屏（EraseAll）时使用。
+	// 为空表示这是一次「单行操作」的撤销记录（用 Index + UnDoData 定位与恢复）；
+	// 非空表示这是一次「整页清空」的撤销记录，恢复时直接整体回填 Data。
+	//
+	// 之所以需要它：旧实现只把 Data.back() 入栈，若页面存在多行
+	// （超过 MAX_MEMORY_BLOCK 后自动分块），撤销只能恢复最后一行，
+	// 其余行永久丢失，表现为「清屏后撤销只能恢复一部分内容」。
+	vector<vector<WriteData>> PageSnapshot;
+
+	// 批量擦除快照：拖动橡皮擦一次连续擦除时使用。
+	// 键 = 被擦除笔画所在的行下标，值 = 该行「本次擦除前」的完整内容。
+	// 一次擦除动作（按下到抬起）可能命中同一行/多行的多条笔画，
+	// 此时把它整体作为「一步」入栈，撤销时一次性回填，而不是每条笔画各占一步。
+	// 为空表示这不是批量擦除操作。
+	vector<pair<int, vector<WriteData>>> EraseSnapshot;
 };
 
 struct ImageStruct
@@ -2383,6 +2399,43 @@ bool IsErase()
 //是否需要推入撤销栈
 bool NeedPushUnDoStack = true;
 
+// 本次擦除动作（一次按下到抬起）的累积快照：行下标 -> 该行「擦除前」内容。
+// 之所以放在全局而非 DrawLayer 内部：一次拖动擦除会跨越多帧调用 DrawLayer，
+// 需要跨帧累积；同时擦除动作可能在「抬手帧」结束，而 DrawLayer 早于该判定运行，
+// 因此本容器由擦除逻辑写入、由 WriteT 在抬起时统一封口入栈。
+static vector<pair<int, vector<WriteData>>> g_EraseBatch;
+
+// 把当前累积的擦除快照封口为「一步」推入撤销栈。
+// 仅当确有内容被擦除时才入栈，避免产生无效撤销步；调用后清空累积容器。
+static void FlushEraseBatch(PageDataS& page)
+{
+	if (g_EraseBatch.empty()) return;
+
+	UnDoStack node;
+	node.Index = -1;											// 批量擦除不使用单行索引
+	node.UnDoData.clear();										// 置空：非单行修改分支
+	node.PageSnapshot.clear();									// 置空：非整页清空分支
+	node.EraseSnapshot = std::move(g_EraseBatch);				// 本次擦除前的整行快照集合
+
+	page.UnDoData.push(std::move(node));
+	g_EraseBatch.clear();
+
+	// 撤销一次就必须成为「一步」：这里立刻清空累积容器，保证下次擦除另起一步。
+	// 之前只在别处清理，导致快照被后续擦除覆盖或一直不入栈，表现为「擦除后撤销不管用」。
+}
+
+// 记录一行的「擦除前」快照到当前擦除批次。
+// 同一行在一次擦除动作中可能被连续擦掉多条笔画，只保留「该行首次被擦除前」的完整内容：
+// 若重复覆盖为更晚的快照，撤销时会把中间态当成初态，丢失最先被擦掉的那部分笔画。
+static void RecordEraseSnapshot(const int rowIndex, const vector<WriteData>& before)
+{
+	for (auto& item : g_EraseBatch)
+	{
+		if (item.first == rowIndex) return;
+	}
+	g_EraseBatch.push_back({ rowIndex, before });
+}
+
  // 线段与矩形相交（含端点在内）
 static bool LineHitRect(int x1, int y1, int x2, int y2, int rx, int ry, int rw, int rh)
 {
@@ -2423,25 +2476,6 @@ bool NeedErase(const int& sx1, const int& sy1, const int& sx2, const int& sy2, V
 	if (!IsErasing || Tool::IsInBar) return false;
 
 	int rw = Write::EraseSize * 2 / ScreenScale * EraseStf,rh = Write::EraseSize * 2.8 / ScreenScale * EraseStf;
-
-	//推入撤销栈
-	if (NeedPushUnDoStack)
-	{
-		auto& page = GetCurPage();
-		auto& data = page.Data;
-
-		if (!data.empty() && !data.back().empty())
-		{
-			page.UnDoData.push({ static_cast<int>(data.size() - 1), data.back() });
-		}
-		else
-		{
-			NeedPushUnDoStack = false;
-			return false; // 或者跳过擦除逻辑
-		}
-
-		NeedPushUnDoStack = false;
-	}
 
 	if(!IsLeaf)
 	{
@@ -2598,6 +2632,12 @@ void DrawLayer(RenderTarget& window)
 						{
 							if (NeedErase(sx1, sy1, sx2, sy2, ErasePos))
 							{
+								// 本行首次被擦除时记下「擦除前」整行快照，累积到本次擦除批次；
+								// 抬笔后由 WriteT 调 FlushEraseBatch 整体入栈一步，实现「一次擦除=一步撤销」。
+								// 入栈时机必须在真正修改数据之前，且此时 pd.Data[i] 仍为「擦除前」内容。
+								if (!pd.Data[i].empty())
+									RecordEraseSnapshot(i, pd.Data[i]);
+
 								swap(pd.Data[i][k], pd.Data[i].back());
 								pd.Data[i].pop_back();
 								--k;
@@ -2608,6 +2648,10 @@ void DrawLayer(RenderTarget& window)
 						{
 							if (NeedErase(sx1, sy1, sx2, sy2, ErasePos, true, ssx1, ssy1))
 							{
+								// 同上：柳叶笔（带起点）命中时也累积到批量快照，抬笔后整体作为一步入栈
+								if (!pd.Data[i].empty())
+									RecordEraseSnapshot(i, pd.Data[i]);
+
 								swap(pd.Data[i][k], pd.Data[i].back());
 								pd.Data[i].pop_back();
 								--k;
@@ -3855,6 +3899,11 @@ void Write::WriteT(RenWin& window)
 	{
 		//重置撤销栈标志
 		NeedPushUnDoStack = true;
+
+		// 擦除动作刚结束（本帧未处于擦除态）：把本次累积的擦除快照封口为一步撤销。
+		// 关键修复：之前只在 DrawLayer 中累积 g_EraseBatch，却从未调用 FlushEraseBatch，
+		// 导致擦除数据永远不入撤销栈——表现为「擦除后推入撤销栈不管用」。
+		FlushEraseBatch(GetCurPage());
 	}
 	else
 	{
@@ -4069,6 +4118,35 @@ void Write::UnDo()
 	auto node = std::move(undoStack.top());
 	undoStack.pop();
 
+	// 整页快照撤销（清屏）：直接把整页 Data 回填为清屏前的完整内容。
+	// 必须在「索引校验」之前处理，因为清屏会重建 Data（只剩一行空行），
+	// 旧的 Index 已无意义。
+	if (!node.PageSnapshot.empty())
+	{
+		data = std::move(node.PageSnapshot);
+		FlushWriteLayer = true;
+		return;
+	}
+
+	// 批量擦除撤销：一次擦除动作（按下到抬起）可能擦掉多行、多条笔画，
+	// 这里按快照逐行整体回填，从而「一次擦除 = 一步撤销」。
+	// 必须在「索引校验」之前处理，因为批量擦除的 Index 恒为 -1，不参与单行定位。
+	if (!node.EraseSnapshot.empty())
+	{
+		for (auto& item : node.EraseSnapshot)
+		{
+			const int row = item.first;
+			// 防御：行下标可能因期间的其他结构性改动而失效
+			if (row < 0 || row >= static_cast<int>(data.size())) continue;
+
+			// 注意：擦除只从行内删元素，不会删行，故行下标在本次擦除期间保持稳定；
+			// 这里用「擦除前的整行内容」覆盖回该行即可完整还原。
+			data[row] = std::move(item.second);
+		}
+		FlushWriteLayer = true;
+		return;
+	}
+
 	// 防御：索引非法
 	if (node.Index < 0 || node.Index >= static_cast<int>(data.size()))
 		return;
@@ -4090,10 +4168,28 @@ void Write::UnDo()
 //擦除全部
 void Write::EraseAll()
 {
-	//推入撤销栈
-	if (!GetCurPage().Data.empty() && !GetCurPage().Data.back().empty())
+	// 推入撤销栈：清屏是一次「整页」级别的修改，必须保存整页快照。
+	// 旧实现只保存 Data.back()，页面存在多行（超过 MAX_MEMORY_BLOCK 自动分块）时，
+	// 撤销只能恢复最后一行，其余行永久丢失。改用 PageSnapshot 保存全部行的擦除前内容。
 	{
-		GetCurPage().UnDoData.push({ static_cast<int>(GetCurPage().Data.size() - 1), GetCurPage().Data.back() });
+		auto& page = GetCurPage();
+
+		// 判断整页是否存在有效内容：任一非空行即视为有内容
+		bool hasContent = false;
+		for (const auto& row : page.Data)
+		{
+			if (!row.empty()) { hasContent = true; break; }
+		}
+
+		if (hasContent)
+		{
+			UnDoStack node;
+			node.Index = static_cast<int>(page.Data.size() - 1);	// 兼容旧字段，整页撤销时不使用
+			node.UnDoData.clear();									// 置空：标记为整页快照分支
+			node.PageSnapshot = page.Data;							// 擦除前的整页内容拷贝
+
+			page.UnDoData.push(std::move(node));
+		}
 	}
 
 	GetCurPage().Data.clear();
