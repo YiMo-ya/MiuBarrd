@@ -333,7 +333,7 @@ Color ChooseColorWindow(const Color& cancelColor, RenderWindow& window)
 
 	ColorChooseWindow.close();
 
-	XWindow::SetBackGroundColor(Color(30, 30, 30));
+	XWindow::SetBackGroundColor(User::BackColor);
 	return ReturnColor;
 }
 
@@ -5454,7 +5454,7 @@ void ShowQR(IMAGE& img,RenWin& window, ShareFile& Share)
 		if (!Share.isRunning())
 		{
 			Message::ShowMessage("网络配置错误。", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-			XWindow::SetBackGroundColor(Color(30, 30, 30));
+			XWindow::SetBackGroundColor(User::BackColor);
 
 			break;
 		}
@@ -5488,12 +5488,12 @@ void WriteFile::Save(RenWin& window,wstring path, std::wstring ExtName)
 					ShellExecuteW(nullptr, L"open", L"explorer.exe",
 						path.c_str(), nullptr, SW_SHOWNORMAL);
 				}
-				XWindow::SetBackGroundColor(Color(30, 30, 30));
+				XWindow::SetBackGroundColor(User::BackColor);
 			}
 			else
 			{
 				Message::ShowMessage("导出图片失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-				XWindow::SetBackGroundColor(Color(30, 30, 30));
+				XWindow::SetBackGroundColor(User::BackColor);
 			}
 			return;
 		}
@@ -5533,7 +5533,7 @@ void WriteFile::Save(RenWin& window,wstring path, std::wstring ExtName)
 					else
 					{
 						Message::ShowMessage("转换QR码失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-						XWindow::SetBackGroundColor(Color(30, 30, 30));
+						XWindow::SetBackGroundColor(User::BackColor);
 					}
 
 					ShellExecuteW(NULL, L"open", L"MiuBarrdLoader.exe", NULL, NULL, false);
@@ -5553,13 +5553,13 @@ void WriteFile::Save(RenWin& window,wstring path, std::wstring ExtName)
 				else
 				{
 					Message::ShowMessage("配置路径失败：" + path, "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-					XWindow::SetBackGroundColor(Color(30, 30, 30));
+					XWindow::SetBackGroundColor(User::BackColor);
 				}
 			}
 			else
 			{
 				Message::ShowMessage("由于文件内容配置不当导致保存失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-				XWindow::SetBackGroundColor(Color(30, 30, 30));
+				XWindow::SetBackGroundColor(User::BackColor);
 			}
 			return;
 		}
@@ -5569,7 +5569,7 @@ void WriteFile::Save(RenWin& window,wstring path, std::wstring ExtName)
 	if (!save.is_open())
 	{
 		Message::ShowMessage("导出图片失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-		XWindow::SetBackGroundColor(Color(30, 30, 30));
+		XWindow::SetBackGroundColor(User::BackColor);
 		return;
 	}
 
@@ -5603,7 +5603,7 @@ void WriteFile::Save(RenWin& window,wstring path, std::wstring ExtName)
 		ShellExecuteW(nullptr, L"open", L"explorer.exe",
 			path.c_str(), nullptr, SW_SHOWNORMAL);
 	}
-	XWindow::SetBackGroundColor(Color(30, 30, 30));
+	XWindow::SetBackGroundColor(User::BackColor);
 }
 
 void WriteFile::Load(wstring path)
@@ -5616,7 +5616,7 @@ void WriteFile::Load(wstring path)
 		return;
 	}
 
-	XWindow::SetBackGroundColor(Color(30, 30, 30));
+	XWindow::SetBackGroundColor(User::BackColor);
 
 	PageData.clear();
 
@@ -5721,7 +5721,7 @@ void ShowShareCameraQR(IMAGE& img, RenWin& window, ShareCamera& Share)
 		if (!Share.isRunning())
 		{
 			Message::ShowMessage("网络配置错误。", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-			XWindow::SetBackGroundColor(Color(30, 30, 30));
+			XWindow::SetBackGroundColor(User::BackColor);
 
 			break;
 		}
@@ -5782,7 +5782,7 @@ void WriteCamera::ManageShareCamera(RenWin& window)
 			else
 			{
 				Message::ShowMessage("转换QR码失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-				XWindow::SetBackGroundColor(Color(30, 30, 30));
+				XWindow::SetBackGroundColor(User::BackColor);
 			}
 
 		}

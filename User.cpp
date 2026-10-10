@@ -5,6 +5,7 @@
 NOSTD; NOXS;
 
 Color User::MainColor = Color(190, 170, 255);
+Color User::BackColor = Color(33, 33, 33);
 bool User::EnableFixShape = true;
 bool User::EnableWriteAdjust = true;
 bool User::EnableAnimation = true;
@@ -27,6 +28,13 @@ void User::Read()
 
 				UserLoad >> r >> g >> b;
 				MainColor = Color(r, g, b);
+			}
+			if (temp == "[BACKCOLOR]")
+			{
+				int r, g, b;
+
+				UserLoad >> r >> g >> b;
+				BackColor = Color(r, g, b);
 			}
 			if (temp == "[FIXSHAPE]")
 			{
@@ -54,6 +62,7 @@ void User::Read()
 		if (!UserSave.is_open()) return;
 
 		UserSave << "[MAINCOLOR] " << to_string(MainColor.r) << " " << to_string(MainColor.g) << " " << to_string(MainColor.b) << endl
+			<< "[BackColor] " << to_string(BackColor.r) << " " << to_string(BackColor.g) << " " << to_string(BackColor.b) << endl
 			<< "[FIXSHAPE] " << to_string(EnableFixShape ? 1 : 0) << endl
 			<< "[ADJUST] " << to_string(EnableWriteAdjust ? 1 : 0) << endl
 			<< "[ANIMATION] " << to_string(EnableAnimation ? 1 : 0) << endl

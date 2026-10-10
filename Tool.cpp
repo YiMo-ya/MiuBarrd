@@ -507,7 +507,7 @@ void MinExe(RenWin& window)
 		if (!ImgY.IsAnimation()) break;
 	}
 
-	XWindow::SetBackGroundColor(Color(30, 30, 30));
+	XWindow::SetBackGroundColor(User::BackColor);
 }
 
 #pragma endregion
@@ -1287,7 +1287,7 @@ class MoreBar
 	Color ChooseColor(Color resetColor, RenderWindow& window)
 	{
 		Color c = ChooseColorWindow(resetColor, window);
-		XWindow::SetBackGroundColor(Color(30, 30, 30));
+		XWindow::SetBackGroundColor(User::BackColor);
 
 		PerNeedRedraw = true;
 		NeedReDraw = true;
@@ -3718,7 +3718,7 @@ public:
 			if (!rt.resize(ITU({ BasicSizeTemp + 4,BasicSizeTemp * 2 + UISpace + 4 })))
 			{
 				Message::ShowMessage("处理ScrollBar纹理错误", "错误", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-				XWindow::SetBackGroundColor(Color(30, 30, 30));
+				XWindow::SetBackGroundColor(User::BackColor);
 			}
 
 			ArrowAlpha[0].SetAnimation(255, TotalFrame);

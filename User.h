@@ -6,6 +6,8 @@ class User
 public:
 	static Color MainColor;
 
+	static Color BackColor;
+
 	static bool EnableFixShape;
 	static bool EnableWriteAdjust;
 

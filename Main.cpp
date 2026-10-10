@@ -314,7 +314,7 @@ void App(RenWin& window)
 
 	SetWindowPos(window.getNativeHandle(), HWND_DESKTOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
-	XWindow::SetBackGroundColor(Color(30, 30, 30));
+	XWindow::SetBackGroundColor(User::BackColor);
 
 	WindowSize = { ScreenSize.x, ScreenSize.y - 1 };
 

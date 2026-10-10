@@ -562,7 +562,7 @@ void Update(RenWin& window)
 
 	backAlpha = 255;
 
-	XWindow::SetBackGroundColor(Color(30, 30, 30));
+	XWindow::SetBackGroundColor(User::BackColor);
 
 	bool isExit = false;
 
@@ -664,7 +664,7 @@ void Hello(RenWin& window)
 
 	backAlpha = 255;
 
-	XWindow::SetBackGroundColor(Color(30, 30, 30));
+	XWindow::SetBackGroundColor(User::BackColor);
 
 	while (!XMsg::IsClose(window))
 	{
@@ -713,7 +713,7 @@ void Hello(RenWin& window)
 
 	XMsg::ResetCloseMsg();
 
-	XWindow::SetBackGroundColor(Color(30, 30, 30));
+	XWindow::SetBackGroundColor(User::BackColor);
 }
 
 #pragma endregion

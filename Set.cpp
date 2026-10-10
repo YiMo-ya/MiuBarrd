@@ -286,7 +286,7 @@ void EnterSetting(RenWin& window)
 		XText::SetFontAdjust(ADJUST_CENTER, ADJUST_TOP);
 		XText::Xyprintf(BarX + BarW / 2, BarY.value + BarH * 0.04, L"MiuBarrd 设置", window);
 
-		int y = BarY.value + BarH * 0.16;
+		int y = BarY.value + BarH * 0.1;
 
 		//1. 主色
 		{
@@ -317,14 +317,53 @@ void EnterSetting(RenWin& window)
 				if (hover)
 				{
 					User::MainColor = ChooseColorWindow(User::MainColor, window);
-					XWindow::SetBackGroundColor(Color(30, 30, 30));
+					XWindow::SetBackGroundColor(User::BackColor);
 					Apply();
 				}
 			}
 		}
 		y += RowH;
 
-		//2. 图形矫正
+		//2. 背景色
+		{
+			int ox = (int)RowOffset[0].value;
+			int alpha = (int)RowAlpha[0].value;
+
+			XText::SetFontConfig(Color(255, 255, 255, alpha), FONTSIZE * 1.2);
+			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
+			XText::Xyprintf(RowX, y + RowH / 2 + ox, L"背景颜色", window);
+
+			//颜色块（小一点）
+			int sw = RowH * 0.5;
+			int sx = RowX + RowW * 0.72;
+			int sy = y + RowH / 2 - sw / 2 + ox;
+
+			bool hover = XMsg::MouseMsg::IsMouseIn(sx, sy, sw, sw);
+			ColorSwatchScale.SetAnimation(hover ? 115 : 100, 12);
+			ColorSwatchScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 2);
+
+			int s = (int)(sw * ColorSwatchScale.value / 100.0);
+			int cx = sx + sw / 2, cy = sy + sw / 2;
+
+			XGraph::SetFillColor(User::BackColor);
+			static int lw = XSystem::Info::GetScreenSize().x / 1280.0;
+			XGraph::LineShape::SetLineWidth(lw);
+			XGraph::SetColor(User::MainColor);
+			XGraph::RectangleShape::FillRoundRect(cx - s / 2, cy - s / 2, s, s, WindowSize.x / 250, window);
+
+			if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft))
+			{
+				if (hover)
+				{
+					User::BackColor = ChooseColorWindow(User::BackColor, window);
+					XWindow::SetBackGroundColor(User::BackColor);
+					Apply();
+				}
+			}
+		}
+		y += RowH;
+
+		//3. 图形矫正
 		{
 			int ox = (int)RowOffset[1].value;
 			int alpha = (int)RowAlpha[1].value;
@@ -344,7 +383,7 @@ void EnterSetting(RenWin& window)
 		}
 		y += RowH;
 
-		//3. 书写对齐线
+		//4. 书写对齐线
 		{
 			int ox = (int)RowOffset[2].value;
 			int alpha = (int)RowAlpha[2].value;
@@ -364,7 +403,7 @@ void EnterSetting(RenWin& window)
 		}
 		y += RowH;
 
-		//4. 动画形象
+		//5. 动画形象
 		{
 			int ox = (int)RowOffset[3].value;
 			int alpha = (int)RowAlpha[3].value;
@@ -384,7 +423,7 @@ void EnterSetting(RenWin& window)
 		}
 		y += RowH;
 
-		//5. 缩回UI
+		//6. 缩回UI
 		{
 			int ox = (int)RowOffset[4].value;
 			int alpha = (int)RowAlpha[4].value;
