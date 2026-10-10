@@ -20,7 +20,7 @@ static void InitMessageWindow(int r,int g,int b, IconType IcoType)
 {
 	//创建窗口
 #pragma region MyRegion
-	XWindow::CreateGraphWindow(MessageWindow, -1, -1, ScreenSize.x * 2 / 5, ScreenSize.y / 6, "Animata",Style::Close);
+	XWindow::CreateGraphWindow(MessageWindow,"MiuBarrd", -1, -1, ScreenSize.x * 2 / 5, ScreenSize.y / 6,Style::Close);
 	XWindow::SetIcon(MessageWindow, ImgPath + L"\\Icon.dll");
 
     XWindow::RemoveWindowStyle(MessageWindow, WS_MINIMIZEBOX);

@@ -86,7 +86,7 @@ namespace xs
 		/// <param name="style">窗口样式</param>
 		/// <param name="state">窗口类型</param>
 		/// <param name="setting">OpenGL设置</param>
-		void CreateGraphWindow(RenWin& Window, int x = -1, int y = -1, int w = -1, int h = -1,std::string title = "window", uint32_t style = 7U, sf::State state = State::Windowed);
+		void CreateGraphWindow(RenWin& Window, std::string title, int x = -1, int y = -1, int w = -1, int h = -1, uint32_t style = 7U, sf::State state = State::Windowed);
 		/// <summary>
 		/// 创建窗口
 		/// </summary>
@@ -99,7 +99,7 @@ namespace xs
 		/// <param name="style">窗口样式</param>
 		/// <param name="state">窗口类型</param>
 		/// <param name="setting">OpenGL设置</param>
-		void CreateGraphWindow(RenWin& Window, int x = -1, int y = -1, int w = -1, int h = -1, std::wstring title = L"window", uint32_t style = 7U, sf::State state = State::Windowed);
+		void CreateGraphWindow(RenWin& Window, std::wstring title, int x = -1, int y = -1, int w = -1, int h = -1, uint32_t style = 7U, sf::State state = State::Windowed);
 		/// <summary>
 		/// 帧刷新窗口
 		/// </summary>
@@ -118,7 +118,7 @@ namespace xs
 		/// <returns>返回当前背景颜色</returns>
 		Color GetBackGroundColor();
 		/// <summary>
-		/// 判断当前窗口是否为焦点窗口
+		/// 判断当前窗口是否为前台窗口
 		/// </summary>
 		/// <param name="Window">目标窗口</param>
 		/// <returns></returns>
@@ -333,12 +333,14 @@ namespace xs
 			/// </summary>
 			/// <param name="hwnd">目标窗口句柄</param>
 			/// <param name="round">圆角类型</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowRoundCorner(HWND Hwnd, WindowCorner Round);
 			/// <summary>
 			/// 设置窗口圆角选项
 			/// </summary>
 			/// <param name="window">目标窗口</param>
 			/// <param name="round">圆角类型</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowRoundCorner(RenWin& Window, WindowCorner Round);
 
 			/// <summary>
@@ -346,12 +348,14 @@ namespace xs
 			/// </summary>
 			/// <param name="hwnd">目标窗口句柄</param>
 			/// <param name="color">边框颜色</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowBorderColor(HWND Hwnd, Color Color);
 			/// <summary>
 			/// 设置窗口边框颜色
 			/// </summary>
 			/// <param name="window">目标窗口</param>
 			/// <param name="color">边框颜色</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowBorderColor(RenWin& Window, Color Color);
 
 			/// <summary>
@@ -359,12 +363,14 @@ namespace xs
 			/// </summary>
 			/// <param name="hwnd">目标窗口句柄</param>
 			/// <param name="color">标题栏颜色</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowTitleBarColor(HWND Hwnd, Color Color);
 			/// <summary>
 			/// 设置窗口标题栏颜色
 			/// </summary>
 			/// <param name="window">目标窗口</param>
 			/// <param name="color">标题栏颜色</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowTitleBarColor(RenWin& Window, Color Color);
 
 			/// <summary>
@@ -372,12 +378,14 @@ namespace xs
 			/// </summary>
 			/// <param name="hwnd">目标窗口句柄</param>
 			/// <param name="color">标题文字颜色</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowTitleTextColor(HWND Hwnd, Color Color);
 			/// <summary>
 			/// 设置窗口标题文字颜色
 			/// </summary>
 			/// <param name="window">目标窗口</param>
 			/// <param name="color">标题文字颜色</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowTitleTextColor(RenWin& Window, Color Color);
 
 			/// <summary>
@@ -385,12 +393,14 @@ namespace xs
 			/// </summary>
 			/// <param name="hwnd">目标窗口句柄</param>
 			/// <param name="type">背景类型</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowBackType(HWND Hwnd, WindowBackType Type);
 			/// <summary>
 			/// 设置窗口背景类型
 			/// </summary>
 			/// <param name="window">目标窗口</param>
 			/// <param name="type">背景类型</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowBackType(RenWin& Window, WindowBackType Type);
 
 			/// <summary>
@@ -398,12 +408,14 @@ namespace xs
 			/// </summary>
 			/// <param name="hwnd">目标窗口句柄</param>
 			/// <param name="EnableDarkMode">是否启用深色模式</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowDarkMode(HWND Hwnd, bool EnableDarkMode);
 			/// <summary>
 			/// 设置窗口深色模式
 			/// </summary>
 			/// <param name="window">目标窗口</param>
 			/// <param name="EnableDarkMode">是否启用深色模式</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void SetWindowDarkMode(RenWin& Window, bool EnableDarkMode);
 
 			/// <summary>
@@ -411,12 +423,14 @@ namespace xs
 			/// </summary>
 			/// <param name="hwnd">目标窗口句柄</param>
 			/// <param name="enable">是否启用</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void EnableWindowShadow(HWND Hwnd, bool enable);
 			/// <summary>
 			/// 启用或禁用窗口阴影
 			/// </summary>
 			/// <param name="window">目标窗口</param>
 			/// <param name="enable">是否启用</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void EnableWindowShadow(RenWin& Window, bool enable);
 
 			/// <summary>
@@ -427,6 +441,7 @@ namespace xs
 			/// <param name="bottom">下边距</param>
 			/// <param name="left">左边距</param>
 			/// <param name="right">右边距</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void ExtendIntoClientArea(HWND Hwnd, int top, int bottom, int left, int right);
 			/// <summary>
 			/// 扩展客户区到非客户区（用于自定义标题栏）
@@ -436,6 +451,7 @@ namespace xs
 			/// <param name="bottom">下边距</param>
 			/// <param name="left">左边距</param>
 			/// <param name="right">右边距</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void ExtendIntoClientArea(RenWin& Window, int top, int bottom, int left, int right);
 
 			/// <summary>
@@ -443,12 +459,14 @@ namespace xs
 			/// </summary>
 			/// <param name="hwnd">目标窗口句柄</param>
 			/// <param name="disable">是否禁用</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void DisableTransitionAnimation(HWND Hwnd, bool disable);
 			/// <summary>
 			/// 禁用窗口动画过渡效果
 			/// </summary>
 			/// <param name="window">目标窗口</param>
 			/// <param name="disable">是否禁用</param>
+			/// <param name="警告">只在Windows11中有效</param>
 			void DisableTransitionAnimation(RenWin& Window, bool disable);
 		};
 	};

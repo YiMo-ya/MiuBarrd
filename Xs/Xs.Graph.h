@@ -769,7 +769,7 @@ namespace XText
 	/// 查找并设置本地安装的字体
 	/// </summary>
 	/// <param name="fontname">字体名称</param>
-	void FindFont(const String& fontname);
+	void FindFont(const std::wstring& fontname);
 
 	/// <summary>
 	/// 设置文本对齐方式
@@ -783,14 +783,28 @@ namespace XText
 	/// <param name="str">文本</param>
 	/// <param name="fontsize">字体大小</param>
 	/// <returns>总宽度</returns>
-	int GetFontWidth(const String& str, unsigned int fontsize = 0);
+	int GetFontWidth(const std::wstring& str, unsigned int fontsize = 0);
 	/// <summary>
 	/// 测量指定文本总高度
 	/// </summary>
 	/// <param name="str">文本</param>
 	/// <param name="fontsize">字体大小</param>
 	/// <returns>总高度</returns>
-	int GetFontHeight(const String& str, unsigned int fontsize = 0);
+	int GetFontHeight(const std::wstring& str, unsigned int fontsize = 0);
+	/// <summary>
+	/// 测量指定文本总宽度
+	/// </summary>
+	/// <param name="str">文本</param>
+	/// <param name="fontsize">字体大小</param>
+	/// <returns>总宽度</returns>
+	int GetFontWidth(const std::string& str, unsigned int fontsize = 0);
+	/// <summary>
+	/// 测量指定文本总高度
+	/// </summary>
+	/// <param name="str">文本</param>
+	/// <param name="fontsize">字体大小</param>
+	/// <returns>总高度</returns>
+	int GetFontHeight(const std::string& str, unsigned int fontsize = 0);
 };
 
 }

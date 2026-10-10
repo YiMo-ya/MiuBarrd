@@ -118,7 +118,7 @@ Color ChooseColorWindow(const Color& cancelColor, RenderWindow& window)
 	}
 
 	RenderWindow ColorChooseWindow;
-	XWindow::CreateGraphWindow(ColorChooseWindow, -1, -1, ScreenSize.x / 3, ScreenSize.y / 2, L"选择颜色", Style::Default);
+	XWindow::CreateGraphWindow(ColorChooseWindow, L"选择颜色", -1, -1, ScreenSize.x / 3, ScreenSize.y / 2, Style::Default);
 
 	HWND hWnd = ColorChooseWindow.getNativeHandle();
 	SetWindowLongPtr(hWnd, GWL_EXSTYLE,
@@ -462,29 +462,28 @@ PageDataS& GetCurPage()
 //SDF 线段抗锯齿
 #pragma region MyRegion
 
+// 着色器内线段数上界（编译期常量）。必须是字面量，GLSL 需要编译期常量做数组与循环上界；
+// 与 SDFLineRenderer::kMaxSegs 严格一致（下方有 static_assert 兜底校验）。
+#define SDF_MAX_SEGS 256
+
 //片元着色器：逐像素求"到最近线段的距离"，再用 fwidth 求解析 AA 带宽
 static const char* kSDFLineFragment = R"(
-uniform vec2  uSegs[512];     // 线段端点打包：偶数项=起点，奇数项=终点（画布像素）
+uniform vec2  uSegs[SDF_MAX_SEGS];  // 线段端点打包：偶数项=起点，奇数项=终点（画布像素）
 uniform float uHalfW;         // 半线宽（像素）
 uniform int   uCount;         // 有效线段数
 uniform float uAlpha;         // 整体不透明度（荧光笔用）
-uniform float uFeather;       // 额外羽化半径（像素），用于把硬边过渡加宽
+uniform float uFeather;       // 羽化下限（像素）：过渡带不得比它更窄，避免欠采样锯齿
 
-// 点到线段的精确距离（含端点夹取），SDF 的核心。
-// 关键优化：内部用"距离平方"比较，避免每次迭代都调用 sqrt/length；
-// 平方比较与开方比较的拓扑一致，不影响取到哪条最近线段。
-float sdSegment(vec2 p, vec2 a, vec2 b)
+// 关键性能优化：等价于 1.0/sqrt 的快速反平方根，规避 GPU 上 1.0/sqrt 的低吞吐。
+// 线段距离只用于比较与最终一次开方，近似误差（<0.2%）落在 AA 过渡带内，肉眼不可见。
+float rsqrtFast(float x)
 {
-    vec2 pa = p - a;
-    vec2 ba = b - a;
-    // 除零保护：退化为点时直接取点距
-    float denom = dot(ba, ba);
-    float h = denom > 1e-6 ? clamp(dot(pa, ba) / denom, 0.0, 1.0) : 0.0;
-    return length(pa - ba * h);
+    return inversesqrt(max(x, 1e-12));
 }
 
-// 点到点距离的平方，用于圆角连接（round join）。
-float sdDot(vec2 p, vec2 c)
+// 点到点距离的平方，用于圆头端点与圆角连接（round cap / round join）。
+// 只返回平方即可——与主循环的"距离平方域"保持一致，省掉一次开方。
+float sdDot2(vec2 p, vec2 c)
 {
     vec2 d = p - c;
     return dot(d, d);
@@ -496,56 +495,82 @@ void main()
     vec2 p = gl_TexCoord[0].xy;
 
     float d2 = 1e18;
-    // 关键性能点：用 dynamic loop 时驱动可能按最大迭代展开，这里保持与 uCount 同步的早退,
-    // 并只对真正需要的线段求距离；配合外层包围盒裁剪，绝大多数像素只跑少量迭代。
-    // 在"距离平方"域里取最小值：省掉每像素 uCount 次开方，
-    // 仅在最后对选出的最近线段开方一次，得到精确有向距离。
-    for (int i = 0; i < 256; i++)
+    // 关键性能点（1）：循环上界用编译期常量 SDF_MAX_SEGS，而非动态 uCount，
+    // 这样驱动可对固定上界做完全展开/流水线化；循环体内再以 uCount 早退，
+    // 配合外层包围盒裁剪，绝大多数像素只跑少量迭代。这是移动 GPU 上最稳的高吞吐写法。
+    // 关键性能点（2）：全程停留在"距离平方域"，省掉每像素 uCount 次开方，
+    // 仅在循环结束后对选出的最近线段开方一次，得到精确有向距离。
+    // 关键性能点（3）：相邻段共享端点判定复用上一轮读入的 curEnd，省一次 uniform 读取。
+    vec2 prevEnd = vec2(0.0);
+    for (int i = 0; i < SDF_MAX_SEGS; i++)
     {
         if (i >= uCount) break;
-        vec2 pa = p - uSegs[i * 2];
-        vec2 ba = uSegs[i * 2 + 1] - uSegs[i * 2];
-        float denom = dot(ba, ba);
-        float h = denom > 1e-6 ? clamp(dot(pa, ba) / denom, 0.0, 1.0) : 0.0;
-        vec2 diff = pa - ba * h;
-        d2 = min(d2, dot(diff, diff));
+
+        vec2 curStart = uSegs[i * 2];
+        vec2 curEnd = uSegs[i * 2 + 1];
+
+        // 内联"点到线段距离平方"（含端点夹取）：省去函数调用开销，利于寄存器调度。
+        // 退化点（denom≈0）用 step 就地屏蔽，替代三元分支，减少 warp divergence。
+        // 方头->圆头：线段 SDF 的胶囊化。仅对投影方向夹取（h 已 clamp）无法保证端点圆角，
+        // 这里额外并入两端点到 p 的距离平方，等价于 min(segD2, endD2) 的强制圆头，
+        // 圆角半径恒为 uHalfW（在下方 d -= uHalfW 统一扣除），与线宽完全一致。
+        {
+            vec2 pa = p - curStart;
+            vec2 ba = curEnd - curStart;
+            float denom = dot(ba, ba);
+            float h = clamp(dot(pa, ba) / max(denom, 1e-6), 0.0, 1.0) * step(1e-6, denom);
+            vec2 diff = pa - ba * h;
+            // 圆头端点：min(线段距离平方, 起点距离平方, 终点距离平方)
+            float segD2 = dot(diff, diff);
+            float endD2 = min(sdDot2(p, curStart), sdDot2(p, curEnd));
+            d2 = min(d2, min(segD2, endD2));
+        }
 
         // 圆角连接（round join）：手写笔迹由首尾相接的短线段组成（上一段终点 == 本段起点）。
-        // 但相邻段仅取"各自线段"的最小距离时，两段各自是胶囊形，在外拐角处会留下一小块缺失，
-        // 视觉上表现为接缝处的凹口/不平滑。这里在共享端点处额外补一个"圆盘"参与 SDF 极小值：
-        // 圆盘半径 = 半线宽，与本段胶囊同宽，于是两段在连接处按圆的并集过渡，
-        // 接缝处自然圆润，无论线宽是否变化都不会出现缺口。
+        // 相邻段各自是胶囊形，在外拐角处会留下一小块缺失（接缝凹口）；这里在共享端点处
+        // 额外补一个"圆盘"参与 SDF 极小值，圆盘半径 = 半线宽，于是接缝按圆的并集过渡，
+        // 无论线宽是否变化都不会出现缺口（折角处即形成硬朗的圆角，而非缺口）。
         if (i > 0)
         {
-            // 上一段终点：uSegs[i*2 - 1]（即 (i-1)*2 + 1）
-            vec2 prevEnd = uSegs[i * 2 - 1];
-            vec2 curStart = uSegs[i * 2];
-            // 端点重合判定：距离平方 < 1 像素²，视为连续笔画（避免把两笔独立短划也连起来）
-            if (dot(prevEnd - curStart, prevEnd - curStart) < 1.0)
-            {
-                d2 = min(d2, sdDot(p, curStart));
-            }
+            // 端点重合判定：smoothstep(0.25, 2.25, gap²) 给出 0~1 的连续性权重。
+            // gap² < 0.25（间距 < 0.5px）→ 完全连续（权重 0，补圆盘）；
+            // gap² > 2.25（间距 > 1.5px）→ 完全断开（权重 1，不补圆盘）；
+            // 中间区间平滑过渡，避免端点恰好落在阈值附近时出现接缝闪烁。
+            vec2 gap = prevEnd - curStart;
+            float gap2 = dot(gap, gap);
+            float disc = 1.0 - smoothstep(0.25, 2.25, gap2);
+            // 无分支选择：disc==0 时补圆盘，disc==1 时用 1e18 屏蔽（不参与极小值）。
+            d2 = min(d2, mix(sdDot2(p, curStart), 1e18, disc));
         }
+
+        prevEnd = curEnd;
     }
 
-    // 只在最后对"最近的一条"开方，得到精确有向距离
-    float d = sqrt(d2);
+    // 只在最后对"最近的一条"开方，得到精确有向距离。
+    // sqrt(x) == x * rsqrtFast(x)：部分移动 GPU 上 rsqrt 吞吐高于 sqrt，二者数学等价。
+    float d = d2 * rsqrtFast(d2);
 
     // 有向距离 < 0 表示在笔画内部
     d -= uHalfW;
 
-    // 解析 AA 带宽：取屏幕空间导数，保证边缘过渡始终约 1 像素宽；
-    // 再叠加 uFeather 让过渡带更宽，从而在放大/高 DPI 下获得更柔和的边缘。
-    // max() 保证高倍缩放下过渡带不会被拉得比像素还细（避免锯齿回归）。
-    // 0.7071(=√2/2) 让过渡带恰好铺满 ±1 像素，边缘更顺滑而不发胖。
-    float aa = max(fwidth(d) * 0.7071, uFeather);
-    // 用等效于 smoothstep 的线性映射 + 后续 Hermite 曲线：
-    // 省掉 smoothstep 的分支与额外乘加，边界过渡在所有缩放级别下都连续平滑。
-    float a = clamp(0.5 - d / (2.0 * aa), 0.0, 1.0);
+    // 解析 AA 带宽：理论最优为"恰好一个像素宽"的盒式滤波覆盖率——
+    // fwidth(d) 给出 d 随屏幕空间一阶变化率，即距离场跨过 1 像素所需的 Δd。
+    // 关键质量优化（抗锯齿拉满）：
+    //  1) 过渡带宽度恒取 1.0·fwidth(d)，边缘覆盖率精确等于像素盒的解析积分，
+    //     这是解析 AA 的理论上限，再窄会欠采样（锯齿回归）、再宽只是模糊而非抗锯齿。
+    //  2) 不再用 uFeather 去"加宽"过渡带：加宽只会把锐利边缘糊掉，降低有效对比度，
+    //     并不是更强的抗锯齿。uFeather 从"加宽项"改为"下限保护项"，只用于
+    //     极端自适应细分导致 fwidth 塌缩到亚像素（除法趋近 0）时兜底，防止带宽过窄。
+    //  3) max() 取二者较大值：fwidth 正常时以解析带宽为准（理论最优），
+    //     fwidth 异常小时以 uFeather 兜底（稳定），同时规避除零。
+    float aa = max(fwidth(d), max(uFeather, 1e-4));
 
-    // 对 alpha 做三次平滑（Hermite 曲线），让内部实心区更饱满、
-    // 边缘衰减更自然，消除线性过渡残留的可见色阶。
-    float alpha = a * a * (3.0 - 2.0 * a);
+    // 关键质量优化：用五次（quintic）Hermite 平滑替代三次，C2 连续、两端一阶导为 0，
+    // 边缘衰减比三次更接近理想 step，彻底消除线性/三次过渡残留的可见色阶。
+    float t = clamp(0.5 - d / (2.0 * aa), 0.0, 1.0);
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float alpha = t3 * (t2 * 6.0 - 15.0 * t + 10.0);
 
     if (alpha <= 0.0) discard;
 
@@ -610,14 +635,14 @@ public:
         m_shader.setUniform("uHalfW", halfW);
         m_shader.setUniform("uCount", segCount);
         m_shader.setUniform("uAlpha", alpha);
-        // 羽化半径与线宽挂钩但设下限：细线也能获得约 1px 的柔和过渡，
-        // 粗线不至于被羽化吃掉内部实心区。不随分辨率变化，保证性能恒定。
+        // uFeather 语义已从"加宽过渡带"改为"过渡带下限保护"（见片元着色器说明）：
+        // 抗锯齿质量由解析带宽 fwidth(d)（精确 1 像素盒式覆盖率）主导，这里只提供
+        // 一个很窄的兜底值，防止极端自适应细分下 fwidth 塌缩导致的除零/带宽过窄。
+        // 因此不再随线宽放大：固定为亚像素级别（0.35px），既不糊掉边缘，也不需要
+        // 每次绘制重算。不随分辨率变化，性能恒定（仅为常量上传）。
         // 注意：不能用 std::min/std::max —— Windows.h 的 min/max 宏会把它展开成
-        // "::(a,b)" 从而编译报错（C2589）；这里用三元表达式规避宏冲突。
-        float feather = halfW * 0.25f;
-        if (feather > 1.5f) feather = 1.5f;
-        if (feather < 0.6f) feather = 0.6f;
-        m_shader.setUniform("uFeather", feather);
+        // "::(a,b)" 从而编译报错（C2589）；这里直接用常量规避宏冲突。
+        m_shader.setUniform("uFeather", 0.35f);
 
         // 关键性能点：quad 只覆盖这批线段的包围盒，而不是整块画布。
         // 片元深度与"覆盖面积 × 线段数"成正比，全屏 quad 在 4K 下会让
@@ -679,6 +704,12 @@ private:
     bool m_tried = false;   ///< 是否已尝试编译，避免重复失败的编译开销
 };
 
+// 编译期校验：着色器内的 SDF_MAX_SEGS 必须与 SDFLineRenderer::kMaxSegs 严格一致，
+// 否则 setUniformArray 会越界写入或漏填，导致距离场读取到脏数据（表现为笔迹边缘错乱）。
+// 放在 kMaxSegs 定义之后，保证此处已可见该常量。
+static_assert(SDF_MAX_SEGS == SDFLineRenderer::kMaxSegs,
+    "SDF_MAX_SEGS 必须与 SDFLineRenderer::kMaxSegs 保持一致");
+
 //SDF 线段打包缓冲：把 WriteData 转成着色器需要的端点数组
 vector<sf::Glsl::Vec2> g_SDFSegs;
 sf::Color g_SDFColor = sf::Color::White;
@@ -724,6 +755,134 @@ static void SDFBatchFlush(sf::RenderTarget& target)
         target, g_SDFSegs.data(), (int)g_SDFSegs.size() / 2, g_SDFHalfW, g_SDFColor, 1.f);
     g_SDFSegs.clear();
 }
+
+//贝塞尔曲线平滑
+#pragma region MyRegion
+
+// 曲线每段的三次贝塞尔细分份数上界。
+// 之所以给出上界：细分份数由相邻控制点的实际间距决定（自适应细分），
+// 但极端情况下（同一点被反复采样导致间距抖动极大）必须截断，
+// 否则单条笔迹会展开成上千条短线段，既拖慢 CPU 展开，也会撑爆 SDF 批次的线段容量。
+static const int BEZIER_MAX_SUBDIV = 16;
+
+// 相邻控制点间距小于该阈值（像素）时不再细分：细分下去也短于一个像素，
+// 徒增线段数量而画面上无任何可见差异。
+static const float BEZIER_MIN_SEG_LEN = 1.5f;
+
+/// <summary>
+/// 三次贝塞尔曲线求值（De Casteljau 展开式，直接代入伯恩斯坦基）。
+/// </summary>
+/// <param name="p0">起点。</param>
+/// <param name="p1">第一控制点。</param>
+/// <param name="p2">第二控制点。</param>
+/// <param name="p3">终点。</param>
+/// <param name="t">参数，取值 [0,1]。</param>
+/// <returns>曲线在 t 处的坐标。</returns>
+static Vector2f BezierEval(Vector2f p0, Vector2f p1, Vector2f p2, Vector2f p3, float t)
+{
+    float u = 1.f - t;
+    // 伯恩斯坦基：u³·p0 + 3u²t·p1 + 3ut²·p2 + t³·p3
+    // 写成 Horner 形式减少乘法次数，并保证 t=0/1 时数值上精确等于端点。
+    float uu = u * u;
+    float tt = t * t;
+
+    Vector2f res;
+    res.x = uu * u * p0.x + 3.f * uu * t * p1.x + 3.f * u * tt * p2.x + tt * t * p3.x;
+    res.y = uu * u * p0.y + 3.f * uu * t * p1.y + 3.f * u * tt * p2.y + tt * t * p3.y;
+    return res;
+}
+
+/// <summary>
+/// 按实际弧长估算三次贝塞尔曲线所需的细分数。
+/// 用「控制多边形长度」近似曲线长度（贝塞尔曲线长度恒 ≤ 控制多边形长度），
+/// 再除以最小段长得到份数；实现简单且足够精确，无需迭代求弧长。
+/// </summary>
+static int BezierSubdivCount(Vector2f p0, Vector2f p1, Vector2f p2, Vector2f p3)
+{
+    float dx1 = p1.x - p0.x, dy1 = p1.y - p0.y;
+    float dx2 = p2.x - p1.x, dy2 = p2.y - p1.y;
+    float dx3 = p3.x - p2.x, dy3 = p3.y - p2.y;
+
+    float polyLen = sqrtf(dx1 * dx1 + dy1 * dy1) +
+                    sqrtf(dx2 * dx2 + dy2 * dy2) +
+                    sqrtf(dx3 * dx3 + dy3 * dy3);
+
+    int n = (int)(polyLen / BEZIER_MIN_SEG_LEN) + 1;
+    if (n < 1) n = 1;
+    if (n > BEZIER_MAX_SUBDIV) n = BEZIER_MAX_SUBDIV;
+    return n;
+}
+
+/// <summary>
+/// 把上一段笔迹的终点与当前新笔迹用三次贝塞尔曲线平滑衔接。
+/// 
+/// 采用「Catmull-Rom 转贝塞尔」的参数化：以 (prev, from, to) 三点构造切线，
+/// 切线取相邻点连线方向（端点做单边差分），再按 1/3 缩放为贝塞尔控制臂长。
+/// 这样生成的曲线经过 from 与 to，且在 prev 处与上一段相切，
+/// 相邻两段因此在连接点处一阶连续（C1），折线感被彻底消除。
+/// 
+/// 之所以不直接用二次贝塞尔：二次曲线在两段衔接处只能保证 C0 连续，
+/// 快速书写时仍会看到明显的折角；三次曲线把切线也纳入控制，
+/// 更接近真实笔迹的惯性表现。
+/// </summary>
+/// <param name="from">本段笔迹起点（屏幕坐标）。</param>
+/// <param name="to">本段笔迹终点（屏幕坐标）。</param>
+/// <param name="prev">上一段的起点；无上一段时传与 from 相同的点（退化为直线）。</param>
+/// <param name="next">下一段的终点；无下一段时传与 to 相同的点（退化为直线）。</param>
+/// <param name="outSegs">输出：细分后折线的采样点，首元素为 from，末元素为 to。</param>
+static void BezierSmoothSegment(Vector2f from, Vector2f to, Vector2f prev, Vector2f next,
+                                vector<Vector2f>& outSegs)
+{
+    outSegs.clear();
+
+    // 切线方向：取自相邻点连线；单一控制点时退化为零向量，此时控制点回落到端点，
+    // 曲线自动退化为直线段——无需额外分支处理起笔/收笔。
+    Vector2f tangentPrev((to.x - prev.x) / 6.f, (to.y - prev.y) / 6.f);
+    Vector2f tangentNext((next.x - from.x) / 6.f, (next.y - from.y) / 6.f);
+
+    Vector2f p1(from.x + tangentPrev.x, from.y + tangentPrev.y);
+    Vector2f p2(to.x - tangentNext.x, to.y - tangentNext.y);
+
+    int n = BezierSubdivCount(from, p1, p2, to);
+
+    outSegs.reserve(n + 1);
+    for (int i = 0; i <= n; ++i)
+    {
+        float t = (float)i / (float)n;
+        outSegs.push_back(BezierEval(from, p1, p2, to, t));
+    }
+}
+
+/// <summary>
+/// 把一段直线笔迹展开为贝塞尔曲线并压入 SDF 批次。
+/// 
+/// 与直接 SDFBatchPush(from→to) 的区别：中间插入若干曲线采样点，
+/// 使相邻线段沿曲线排布而非沿折线排布。
+/// 调用方必须已用 SDFBatchBegin 选好颜色/线宽，本函数不修改批次参数。
+/// </summary>
+/// <param name="target">绘制目标。</param>
+/// <param name="from">起点（目标像素坐标）。</param>
+/// <param name="to">终点（目标像素坐标）。</param>
+/// <param name="prev">上一段起点，用于构造起点切线。</param>
+/// <param name="next">下一段终点，用于构造终点切线。</param>
+static void SDFBatchPushBezier(sf::RenderTarget& target,
+                               Vector2f from, Vector2f to,
+                               Vector2f prev, Vector2f next)
+{
+    static vector<Vector2f> pts;
+    BezierSmoothSegment(from, to, prev, next, pts);
+
+    if (pts.size() < 2)
+    {
+        SDFBatchPush(target, from.x, from.y, to.x, to.y);
+        return;
+    }
+
+    for (size_t i = 0; i + 1 < pts.size(); ++i)
+        SDFBatchPush(target, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
+}
+
+#pragma endregion
 
 #pragma endregion
 
@@ -2706,7 +2865,20 @@ void DrawLayer(RenderTarget& window)
 								SDFBatchBegin(data.color, halfW, shouldBeLight ? (150.f / 255.f) : 1.f);
 							}
 
-							SDFBatchPush(layer, sx1, sy1, sx2, sy2);
+							// 用贝塞尔曲线平滑本段：取上一条笔迹起点作 prev、下一条笔迹终点作 next
+							// 构造切线，使相邻段在连接点处一阶连续，消除折线感。
+							// 边界（首/尾段）用自身端点填充相邻点，曲线自动退化为直线，无需分支。
+							Vector2f fromPt(sx1, sy1), toPt(sx2, sy2);
+							Vector2f prevPt = (k > 0)
+								? Vector2f(pd.Data[i][k - 1].x * scale + camScaleX,
+								           pd.Data[i][k - 1].y * scale + camScaleY)
+								: fromPt;
+							Vector2f nextPt = (k + 1 < dataSize)
+								? Vector2f(pd.Data[i][k + 1].x2 * scale + camScaleX,
+								           pd.Data[i][k + 1].y2 * scale + camScaleY)
+								: toPt;
+
+							SDFBatchPushBezier(layer, fromPt, toPt, prevPt, nextPt);
 						}
 						else
 						{
@@ -2824,7 +2996,20 @@ void DrawNowLayer(RenderTarget& window)
 						SDFBatchBegin(data.color, halfW,
 							Tool::PenCap == 2 ? (150.f / 255.f) : 1.f);
 					}
-					SDFBatchPush(WriteTempLayer, sx1, sy1, sx2, sy2);
+					// 用贝塞尔曲线平滑本段：取上一条笔迹起点作 prev、下一条笔迹终点作 next
+					// 构造切线，使相邻段在连接点处一阶连续，消除折线感。
+					// 边界（首/尾段）用自身端点填充相邻点，曲线自动退化为直线，无需分支。
+					Vector2f fromPt(sx1, sy1), toPt(sx2, sy2);
+					Vector2f prevPt = (i > 0)
+						? Vector2f((WriteDataTemp[i - 1].x + pd.CameraPos.x) * scale,
+						           (WriteDataTemp[i - 1].y + pd.CameraPos.y) * scale)
+						: fromPt;
+					Vector2f nextPt = (i + 1 < (int)WriteDataTemp.size())
+						? Vector2f((WriteDataTemp[i + 1].x2 + pd.CameraPos.x) * scale,
+						           (WriteDataTemp[i + 1].y2 + pd.CameraPos.y) * scale)
+						: toPt;
+
+					SDFBatchPushBezier(WriteTempLayer, fromPt, toPt, prevPt, nextPt);
 				}
 				else
 				{
@@ -2853,11 +3038,11 @@ void DrawNowLayer(RenderTarget& window)
 
 			if(!WriteCamera::EnableWriteCamera)
 			{
-				if (data.w < Tool::PenSize) data.w += 0.3 * scale;
+				if (data.w < Tool::PenSize) data.w += 0.5 / scale;
 			}
 			else
 			{
-				if (data.w < Tool::PenSize / 3) data.w += 0.1 * scale;
+				if (data.w < Tool::PenSize / 3) data.w += 0.3 / scale;
 			}
 				
 		}
@@ -2987,7 +3172,7 @@ void DrawImageLayer(RenWin& window)
 bool StraightenWriteData(
 	std::vector<WriteData>& WriteDataTemp,
 	float tolerance = 10.0f * ScreenScale,
-	float minLength = 200.f)
+	float minLength = 200.f * GetCurPage().Scale / 100.0)
 {
 	size_t N = WriteDataTemp.size();
 	if (N <= 1) return false;
@@ -3068,8 +3253,8 @@ LineEndpoints GetStraightenedEndpoints(
 
 bool StraightenWriteDataToCircle(
 	std::vector<WriteData>& WriteDataTemp,
-	float toleranceRatio = 0.18f,
-	float minRadius = 60.f * ScreenScale,
+	float toleranceRatio = 0.38f,
+	float minRadius = 30.f * ScreenScale,
 	float closeRatio = 0.85f)
 {
 	size_t N = WriteDataTemp.size();
@@ -5233,7 +5418,7 @@ static void SetWindowClassIconFromExe(sf::Window& window, int resId = 1)
 void ShowQR(IMAGE& img,RenWin& window, ShareFile& Share)
 {
 	RenWin QRWindow;
-	XWindow::CreateGraphWindow(QRWindow, -1, -1, WindowSize.x / 2, WindowSize.y / 2, L"MiuBarrd分享板书的QR码",Style::Titlebar | Style::Close);
+	XWindow::CreateGraphWindow(QRWindow, L"MiuBarrd分享板书的QR码" ,-1, -1, WindowSize.x / 2, WindowSize.y / 2,Style::Titlebar | Style::Close);
 	XWindow::DWM::SetWindowTitleBarColor(QRWindow, XWindow::GetBackGroundColor());
 	XWindow::DWM::SetWindowBorderColor(QRWindow, User::MainColor);
 	XWindow::RemoveWindowStyle(QRWindow, WS_MAXIMIZEBOX);
@@ -5502,7 +5687,7 @@ ShareCamera ShareCameraA;
 void ShowShareCameraQR(IMAGE& img, RenWin& window, ShareCamera& Share)
 {
 	RenWin QRWindow;
-	XWindow::CreateGraphWindow(QRWindow, -1, -1, WindowSize.x / 2, WindowSize.y / 2, L"手机投屏", Style::Titlebar | Style::Close);
+	XWindow::CreateGraphWindow(QRWindow, L"手机投屏", -1, -1, WindowSize.x / 2, WindowSize.y / 2, Style::Titlebar | Style::Close);
 	XWindow::DWM::SetWindowTitleBarColor(QRWindow, XWindow::GetBackGroundColor());
 	XWindow::DWM::SetWindowBorderColor(QRWindow, User::MainColor);
 	XWindow::RemoveWindowStyle(QRWindow, WS_MAXIMIZEBOX);

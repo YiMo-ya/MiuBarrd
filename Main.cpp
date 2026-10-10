@@ -238,7 +238,7 @@ void StartAnimation(int PosStartX,int PosStartY,int SizeStartX,int SizeStartY, R
 		XGraph::SetFillColor(Color(30,30,30,150));
 		XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
 
-		if (clock_start > 60)
+		if (clock_start > 30)
 		{
 			if (start_frame <= 20)
 			{
@@ -449,9 +449,8 @@ int main()
 	Vector2i WindowCreateSize = { wx,wy };
 	Vector2i WindowCreatePos = { ScreenSize.x / 2 - WindowCreateSize.x / 2,ScreenSize.y / 2 - WindowCreateSize.y / 2 };
 	XWindow::CreateGraphWindow(
-		MainWindow,
-		WindowCreatePos.x, WindowCreatePos.y, WindowCreateSize.x, WindowCreateSize.y, 
-		"MiuBarrd", Style::None);
+		MainWindow,"MiuBarrd",
+		WindowCreatePos.x, WindowCreatePos.y, WindowCreateSize.x, WindowCreateSize.y, Style::None);
 
 	//设置图标
 	XWindow::SetIcon(MainWindow, ImgPath + L"Icon.dll");
@@ -476,7 +475,7 @@ int main()
 
 		SetWindowPos(MainWindow.getNativeHandle(), HWND_DESKTOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
-		XText::FindFont("微软雅黑");
+		XText::FindFont(L"微软雅黑");
 		WindowSize = ScreenSize;
 		Error::ShowError(
 			MainWindow, { L"MiuBarrd发生严重错误并崩溃了",L"错误原因：缺失关键文件",L"重新安装可以解决此问题",L"错误代码：FONTDLL_LOST"}, L"FONTDLL_LOST");

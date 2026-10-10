@@ -192,7 +192,7 @@ int ChooseType(RenWin& window)
 	int choose = 0;
 
 	RenWin temp;
-	XWindow::CreateGraphWindow(temp, -1, -1, WindowSize.x / 2, WindowSize.y / 2, L"选择保存的格式", Style::Titlebar | Style::Close);
+	XWindow::CreateGraphWindow(temp, L"选择保存的格式" ,-1, -1, WindowSize.x / 2, WindowSize.y / 2, Style::Titlebar | Style::Close);
 	XWindow::DWM::SetWindowTitleBarColor(temp, XWindow::GetBackGroundColor());
 	XWindow::SetOwnerWindow(window);
 	XWindow::DWM::SetWindowBorderColor(temp, User::MainColor);
@@ -1051,7 +1051,7 @@ static Color ChooseColorWindow(const Color& cancelColor, RenderWindow& window)
 	}	
 
 	RenderWindow ColorChooseWindow;
-	XWindow::CreateGraphWindow(ColorChooseWindow,-1,-1,ScreenSize.x / 3, ScreenSize.y / 2, L"选择颜色", Style::Default);
+	XWindow::CreateGraphWindow(ColorChooseWindow, L"选择颜色" ,-1,-1,ScreenSize.x / 3, ScreenSize.y / 2, Style::Default);
 
 	HWND hWnd = ColorChooseWindow.getNativeHandle();
 	SetWindowLongPtr(hWnd, GWL_EXSTYLE,
