@@ -463,115 +463,45 @@ PageDataS& GetCurPage()
 #pragma region MyRegion
 
 // 着色器内线段数上界（编译期常量）。必须是字面量，GLSL 需要编译期常量做数组与循环上界；
-// 与 SDFLineRenderer::kMaxSegs 严格一致（下方有 static_assert 兜底校验）。
 #define SDF_MAX_SEGS 256
 
-//片元着色器：逐像素求"到最近线段的距离"，再用 fwidth 求解析 AA 带宽
 static const char* kSDFLineFragment = R"(
-uniform vec2  uSegs[SDF_MAX_SEGS];  // 线段端点打包：偶数项=起点，奇数项=终点（画布像素）
+uniform vec2  uSegs[512];     // 线段端点打包：偶数项=起点，奇数项=终点（画布像素）
 uniform float uHalfW;         // 半线宽（像素）
 uniform int   uCount;         // 有效线段数
 uniform float uAlpha;         // 整体不透明度（荧光笔用）
-uniform float uFeather;       // 羽化下限（像素）：过渡带不得比它更窄，避免欠采样锯齿
-
-// 关键性能优化：等价于 1.0/sqrt 的快速反平方根，规避 GPU 上 1.0/sqrt 的低吞吐。
-// 线段距离只用于比较与最终一次开方，近似误差（<0.2%）落在 AA 过渡带内，肉眼不可见。
-float rsqrtFast(float x)
-{
-    return inversesqrt(max(x, 1e-12));
-}
-
-// 点到点距离的平方，用于圆头端点与圆角连接（round cap / round join）。
-// 只返回平方即可——与主循环的"距离平方域"保持一致，省掉一次开方。
-float sdDot2(vec2 p, vec2 c)
-{
-    vec2 d = p - c;
-    return dot(d, d);
-}
+uniform float uFeather;       // 额外羽化半径（像素），用于把硬边过渡加宽
 
 void main()
 {
-    // 顶点把画布像素坐标写进 texCoord，这里直接取用
     vec2 p = gl_TexCoord[0].xy;
 
     float d2 = 1e18;
-    // 关键性能点（1）：循环上界用编译期常量 SDF_MAX_SEGS，而非动态 uCount，
-    // 这样驱动可对固定上界做完全展开/流水线化；循环体内再以 uCount 早退，
-    // 配合外层包围盒裁剪，绝大多数像素只跑少量迭代。这是移动 GPU 上最稳的高吞吐写法。
-    // 关键性能点（2）：全程停留在"距离平方域"，省掉每像素 uCount 次开方，
-    // 仅在循环结束后对选出的最近线段开方一次，得到精确有向距离。
-    // 关键性能点（3）：相邻段共享端点判定复用上一轮读入的 curEnd，省一次 uniform 读取。
-    vec2 prevEnd = vec2(0.0);
-    for (int i = 0; i < SDF_MAX_SEGS; i++)
+
+    for (int i = 0; i < 256; i++)
     {
         if (i >= uCount) break;
 
-        vec2 curStart = uSegs[i * 2];
-        vec2 curEnd = uSegs[i * 2 + 1];
-
-        // 内联"点到线段距离平方"（含端点夹取）：省去函数调用开销，利于寄存器调度。
-        // 退化点（denom≈0）用 step 就地屏蔽，替代三元分支，减少 warp divergence。
-        // 方头->圆头：线段 SDF 的胶囊化。仅对投影方向夹取（h 已 clamp）无法保证端点圆角，
-        // 这里额外并入两端点到 p 的距离平方，等价于 min(segD2, endD2) 的强制圆头，
-        // 圆角半径恒为 uHalfW（在下方 d -= uHalfW 统一扣除），与线宽完全一致。
-        {
-            vec2 pa = p - curStart;
-            vec2 ba = curEnd - curStart;
-            float denom = dot(ba, ba);
-            float h = clamp(dot(pa, ba) / max(denom, 1e-6), 0.0, 1.0) * step(1e-6, denom);
-            vec2 diff = pa - ba * h;
-            // 圆头端点：min(线段距离平方, 起点距离平方, 终点距离平方)
-            float segD2 = dot(diff, diff);
-            float endD2 = min(sdDot2(p, curStart), sdDot2(p, curEnd));
-            d2 = min(d2, min(segD2, endD2));
-        }
-
-        // 圆角连接（round join）：手写笔迹由首尾相接的短线段组成（上一段终点 == 本段起点）。
-        // 相邻段各自是胶囊形，在外拐角处会留下一小块缺失（接缝凹口）；这里在共享端点处
-        // 额外补一个"圆盘"参与 SDF 极小值，圆盘半径 = 半线宽，于是接缝按圆的并集过渡，
-        // 无论线宽是否变化都不会出现缺口（折角处即形成硬朗的圆角，而非缺口）。
-        if (i > 0)
-        {
-            // 端点重合判定：smoothstep(0.25, 2.25, gap²) 给出 0~1 的连续性权重。
-            // gap² < 0.25（间距 < 0.5px）→ 完全连续（权重 0，补圆盘）；
-            // gap² > 2.25（间距 > 1.5px）→ 完全断开（权重 1，不补圆盘）；
-            // 中间区间平滑过渡，避免端点恰好落在阈值附近时出现接缝闪烁。
-            vec2 gap = prevEnd - curStart;
-            float gap2 = dot(gap, gap);
-            float disc = 1.0 - smoothstep(0.25, 2.25, gap2);
-            // 无分支选择：disc==0 时补圆盘，disc==1 时用 1e18 屏蔽（不参与极小值）。
-            d2 = min(d2, mix(sdDot2(p, curStart), 1e18, disc));
-        }
-
-        prevEnd = curEnd;
+        vec2 pa = p - uSegs[i * 2];
+        vec2 ba = uSegs[i * 2 + 1] - uSegs[i * 2];
+        float denom = dot(ba, ba);
+        float h = denom > 1e-6 ? clamp(dot(pa, ba) / denom, 0.0, 1.0) : 0.0;
+        vec2 diff = pa - ba * h;
+        d2 = min(d2, dot(diff, diff));
     }
 
-    // 只在最后对"最近的一条"开方，得到精确有向距离。
-    // sqrt(x) == x * rsqrtFast(x)：部分移动 GPU 上 rsqrt 吞吐高于 sqrt，二者数学等价。
-    float d = d2 * rsqrtFast(d2);
+    // 只在最后对"最近的一条"开方，得到精确有向距离
+    float d = sqrt(d2);
 
     // 有向距离 < 0 表示在笔画内部
     d -= uHalfW;
 
-    // 解析 AA 带宽：理论最优为"恰好一个像素宽"的盒式滤波覆盖率。
-    // 关键修复（斜向各向同性 AA）：
-    //   原先用 fwidth(d) 求带宽，fwidth = |dd/dx| + |dd/dy| 是"夹角和"范数，
-    //   对本项目常见的斜向笔迹会引入方向偏置：
-    //     - "\"（左上→右下）时 d 沿 x、y 的变化同号，两项相加被放大 → 带宽过宽，
-    //       过渡带拉长 → 边缘发虚/色阶明显（表现为"锯齿"感）；
-    //     - "/"（左下→右上）时两项反号相消 → 带宽偏窄但恰好接近真值，故看起来平滑。
-    //   这正是"/ 平滑、\ 锯齿"的不对称来源。
-    //   改用梯度模长 length(vec2(dFdx(d), dFdy(d)))，它是旋转不变的各向同性范数，
-    //   对任意角度都给出恒等于"1 像素"的过渡带宽度，消除方向偏置。
-    //   其余保护逻辑保持不变：uFeather 仅作下限兜底（防 fwidth 塌缩到亚像素时带宽过窄）。
-    float aa = max(length(vec2(dFdx(d), dFdy(d))), max(uFeather, 1e-4));
+    // 解析 AA 带宽
+    float aa = max(fwidth(d) * 0.7071, uFeather);
+    float a = clamp(0.5 - d / (2.0 * aa), 0.0, 1.0);
 
-    // 关键质量优化：用五次（quintic）Hermite 平滑替代三次，C2 连续、两端一阶导为 0，
-    // 边缘衰减比三次更接近理想 step，彻底消除线性/三次过渡残留的可见色阶。
-    float t = clamp(0.5 - d / (2.0 * aa), 0.0, 1.0);
-    float t2 = t * t;
-    float t3 = t2 * t;
-    float alpha = t3 * (t2 * 6.0 - 15.0 * t + 10.0);
+    // Hermite 平滑
+    float alpha = a * a * (3.0 - 2.0 * a);
 
     if (alpha <= 0.0) discard;
 
@@ -617,83 +547,61 @@ public:
     /// <param name="halfW">半线宽（像素）。</param>
     /// <param name="color">颜色，alpha 参与混合。</param>
     /// <param name="alpha">额外整体不透明度，荧光笔传 150/255，其余传 1.0。</param>
-    void Draw(sf::RenderTarget& target,
-              const sf::Glsl::Vec2* segs,
-              int segCount,
-              float halfW,
-              const sf::Color& color,
-              float alpha)
-    {
-        if (!Ready() || segCount <= 0) return;
-        // 截断而非报错，避免 uniform 越界读取
-        if (segCount > kMaxSegs) segCount = kMaxSegs;
+	void Draw(sf::RenderTarget& target,
+		const sf::Glsl::Vec2* segs,
+		int segCount,
+		float halfW,
+		const sf::Color& color,
+		float alpha)
+	{
+		if (!Ready() || segCount <= 0) return;
+		if (segCount > kMaxSegs) segCount = kMaxSegs;
 
-        sf::Vector2f size(target.getSize());
-        if (size.x <= 0.f || size.y <= 0.f) return;
+		sf::Vector2f size(target.getSize());
+		if (size.x <= 0.f || size.y <= 0.f) return;
 
-        // 数组 uniform 必须走 setUniformArray 重载（setUniform 不接受指针 + 长度）
-        m_shader.setUniformArray("uSegs", segs, (std::size_t)kMaxSegs * 2);
-        m_shader.setUniform("uHalfW", halfW);
-        m_shader.setUniform("uCount", segCount);
-        m_shader.setUniform("uAlpha", alpha);
-        // uFeather 语义已从"加宽过渡带"改为"过渡带下限保护"（见片元着色器说明）：
-        // 抗锯齿质量由解析带宽 fwidth(d)（精确 1 像素盒式覆盖率）主导，这里只提供
-        // 一个很窄的兜底值，防止极端自适应细分下 fwidth 塌缩导致的除零/带宽过窄。
-        // 因此不再随线宽放大：固定为亚像素级别（0.35px），既不糊掉边缘，也不需要
-        // 每次绘制重算。不随分辨率变化，性能恒定（仅为常量上传）。
-        // 注意：不能用 std::min/std::max —— Windows.h 的 min/max 宏会把它展开成
-        // "::(a,b)" 从而编译报错（C2589）；这里直接用常量规避宏冲突。
-        m_shader.setUniform("uFeather", 0.35f);
+		// 数组 uniform 必须走 setUniformArray 重载（setUniform 不接受指针 + 长度）
+		m_shader.setUniformArray("uSegs", segs, (std::size_t)kMaxSegs * 2);
+		m_shader.setUniform("uHalfW", halfW);
+		m_shader.setUniform("uCount", segCount);
+		m_shader.setUniform("uAlpha", alpha);
+		float feather = halfW * 0.5f;
+		if (feather > 1.5f) feather = 1.5f;
+		if (feather < 0.6f) feather = 0.6f;
+		m_shader.setUniform("uFeather", feather);
 
-        // 关键性能点：quad 只覆盖这批线段的包围盒，而不是整块画布。
-        // 片元深度与"覆盖面积 × 线段数"成正比，全屏 quad 在 4K 下会让
-        // 单个像素跑满 uCount 次距离计算，写第一条线就卡顿。
-        // 手写包围盒：避免 sf::Rect 在 SFML 3 中的构造/成员差异，
-        // 同时绕开 Windows min/max 宏对 position/size 等成员名的干扰
-        float minX = segs[0].x, maxX = segs[0].x;
-        float minY = segs[0].y, maxY = segs[0].y;
-        for (int i = 0; i < segCount; ++i)
-        {
-            const float x = segs[i * 2].x, y = segs[i * 2].y;
-            const float x2 = segs[i * 2 + 1].x, y2 = segs[i * 2 + 1].y;
+		// 包围盒计算（不变）
+		float minX = segs[0].x, maxX = segs[0].x;
+		float minY = segs[0].y, maxY = segs[0].y;
+		for (int i = 0; i < segCount; ++i)
+		{
+			const float x = segs[i * 2].x, y = segs[i * 2].y;
+			const float x2 = segs[i * 2 + 1].x, y2 = segs[i * 2 + 1].y;
+			minX = min(min(minX, x), x2);
+			maxX = max(max(maxX, x), x2);
+			minY = min(min(minY, y), y2);
+			maxY = max(max(maxY, y), y2);
+		}
 
-            minX = (minX < x) ? minX : x;
-            minX = (minX < x2) ? minX : x2;
-            maxX = (maxX > x) ? maxX : x;
-            maxX = (maxX > x2) ? maxX : x2;
-            minY = (minY < y) ? minY : y;
-            minY = (minY < y2) ? minY : y2;
-            maxY = (maxY > y) ? maxY : y;
-            maxY = (maxY > y2) ? maxY : y2;
-        }
+		const float pad = halfW + 2.f; // 稍大一点，确保圆帽不裁
+		float left = max(0.f, minX - pad);
+		float top = max(0.f, minY - pad);
+		float right = min(size.x, maxX + pad);
+		float bottom = min(size.y, maxY + pad);
+		if (right <= left || bottom <= top) return;
 
-        // 外扩半线宽 + 1px AA 余量，保证边缘与端点不被裁掉
-        const float pad = halfW + 1.f;
-        float left = minX - pad;
-        float top = minY - pad;
-        float right = maxX + pad;
-        float bottom = maxY + pad;
+		sf::VertexArray quad(sf::PrimitiveType::TriangleStrip, 4);
+		quad[0] = sf::Vertex(sf::Vector2f(left, top), color);
+		quad[1] = sf::Vertex(sf::Vector2f(right, top), color);
+		quad[2] = sf::Vertex(sf::Vector2f(left, bottom), color);
+		quad[3] = sf::Vertex(sf::Vector2f(right, bottom), color);
+		for (int i = 0; i < 4; ++i)
+			quad[i].texCoords = quad[i].position;
 
-        // 裁剪到目标画布范围内，避免超大包围盒造成无谓填充
-        left = (left > 0.f) ? left : 0.f;
-        top = (top > 0.f) ? top : 0.f;
-        right = (right < size.x) ? right : size.x;
-        bottom = (bottom < size.y) ? bottom : size.y;
-        if (right <= left || bottom <= top) return;
-
-        sf::VertexArray quad(sf::PrimitiveType::TriangleStrip, 4);
-        quad[0] = sf::Vertex(sf::Vector2f(left, top), color);
-        quad[1] = sf::Vertex(sf::Vector2f(right, top), color);
-        quad[2] = sf::Vertex(sf::Vector2f(left, bottom), color);
-        quad[3] = sf::Vertex(sf::Vector2f(right, bottom), color);
-        // 顶点携带画布像素坐标，片元据此重建像素位置（与包围盒裁剪无关）
-        for (int i = 0; i < 4; ++i)
-            quad[i].texCoords = quad[i].position;
-
-        sf::RenderStates states;
-        states.shader = &m_shader;
-        target.draw(quad, states);
-    }
+		sf::RenderStates states;
+		states.shader = &m_shader;
+		target.draw(quad, states);
+	}
 
 private:
     SDFLineRenderer() = default;
@@ -723,7 +631,7 @@ static void SDFBatchBegin(const sf::Color& color, float halfW, float alpha)
 {
     g_SDFColor = color;
     // alpha 单独缩放：荧光笔整体半透明由这里的 alpha 控制，颜色本身的 alpha 仍参与混合
-    g_SDFColor.a = static_cast<std::uint8_t>(color.a * alpha);
+    g_SDFColor.a = static_cast<uint8_t>(color.a * alpha);
     g_SDFHalfW = halfW;
     g_SDFSegs.clear();
     g_SDFSegs.reserve(SDFLineRenderer::kMaxSegs * 2);
@@ -1918,8 +1826,8 @@ void MindMap::Update()
 	auto& pd = GetCurPage();
 	float scale = pd.Scale / 100.0f;
 	if (scale <= 0.0001f) return;
-	int posX = (int)std::floor(screenPos.x / (double)scale - pd.CameraPos.x);
-	int posY = (int)std::floor(screenPos.y / (double)scale - pd.CameraPos.y);
+	int posX = (int)floor(screenPos.x / (double)scale - pd.CameraPos.x);
+	int posY = (int)floor(screenPos.y / (double)scale - pd.CameraPos.y);
 
 	// 命中检测的坐标策略：与 Draw 完全一致地走「世界坐标 -> 屏幕坐标」正变换。
 	//
@@ -2575,9 +2483,9 @@ static void FlushEraseBatch(PageDataS& page)
 	node.Index = -1;											// 批量擦除不使用单行索引
 	node.UnDoData.clear();										// 置空：非单行修改分支
 	node.PageSnapshot.clear();									// 置空：非整页清空分支
-	node.EraseSnapshot = std::move(g_EraseBatch);				// 本次擦除前的整行快照集合
+	node.EraseSnapshot = move(g_EraseBatch);				// 本次擦除前的整行快照集合
 
-	page.UnDoData.push(std::move(node));
+	page.UnDoData.push(move(node));
 	g_EraseBatch.clear();
 
 	// 撤销一次就必须成为「一步」：这里立刻清空累积容器，保证下次擦除另起一步。
@@ -2858,7 +2766,7 @@ void DrawLayer(RenderTarget& window)
 								BatchOpened = true;
 								BatchOnLight = shouldBeLight;
 							}
-							else if (std::abs(halfW - g_SDFHalfW) > 0.01f ||
+							else if (abs(halfW - g_SDFHalfW) > 0.01f ||
 								g_SDFColor.r != data.color.r || g_SDFColor.g != data.color.g ||
 								g_SDFColor.b != data.color.b)
 							{
@@ -2991,7 +2899,7 @@ void DrawNowLayer(RenderTarget& window)
 				{
 					//线宽更新时先冲刷，保证同批次线宽一致
 					float halfW = max(data.w * scale * 0.5f, 0.5f);
-					if (std::abs(halfW - g_SDFHalfW) > 0.01f)
+					if (abs(halfW - g_SDFHalfW) > 0.01f)
 					{
 						SDFBatchFlush(WriteTempLayer);
 						SDFBatchBegin(data.color, halfW,
@@ -3039,11 +2947,11 @@ void DrawNowLayer(RenderTarget& window)
 
 			if(!WriteCamera::EnableWriteCamera)
 			{
-				if (data.w < Tool::PenSize) data.w += 0.5 / scale;
+				if (data.w < Tool::PenSize) data.w += 0.5;
 			}
 			else
 			{
-				if (data.w < Tool::PenSize / 3) data.w += 0.3 / scale;
+				if (data.w < Tool::PenSize / 3) data.w += 0.3;
 			}
 				
 		}
@@ -3171,7 +3079,7 @@ void DrawImageLayer(RenWin& window)
 #pragma region MyRegion
 
 bool StraightenWriteData(
-	std::vector<WriteData>& WriteDataTemp,
+	vector<WriteData>& WriteDataTemp,
 	float tolerance = 10.0f * ScreenScale,
 	float minLength = 200.f * GetCurPage().Scale / 100.0)
 {
@@ -3185,7 +3093,7 @@ bool StraightenWriteData(
 
 	float dx = x2 - x1;
 	float dy = y2 - y1;
-	float segLen = std::hypot(dx, dy);
+	float segLen = hypot(dx, dy);
 
 	if (segLen < minLength) return false;
 	if (N <= 4) return false;
@@ -3195,8 +3103,8 @@ bool StraightenWriteData(
 	for (size_t k = 1; k < N - 1; ++k) {
 		float px = WriteDataTemp[k].x;
 		float py = WriteDataTemp[k].y;
-		float num = std::abs((y2 - y1) * px - (x2 - x1) * py + x2 * y1 - y2 * x1);
-		float den = std::hypot(y2 - y1, x2 - x1);
+		float num = abs((y2 - y1) * px - (x2 - x1) * py + x2 * y1 - y2 * x1);
+		float den = hypot(y2 - y1, x2 - x1);
 		float dist = (den > 1e-6f) ? num / den : 0.0f;
 		if (dist > tolerance) {
 			outOfRangeCount++;
@@ -3230,7 +3138,7 @@ struct LineEndpoints
 };
 
 LineEndpoints GetStraightenedEndpoints(
-	const std::vector<WriteData>& WriteDataTemp,
+	const vector<WriteData>& WriteDataTemp,
 	float scale,
 	const Vector2i& camPos)
 {
@@ -3253,7 +3161,7 @@ LineEndpoints GetStraightenedEndpoints(
 }
 
 bool StraightenWriteDataToCircle(
-	std::vector<WriteData>& WriteDataTemp,
+	vector<WriteData>& WriteDataTemp,
 	float toleranceRatio = 0.38f,
 	float minRadius = 30.f * ScreenScale,
 	float closeRatio = 0.85f)
@@ -3262,7 +3170,7 @@ bool StraightenWriteDataToCircle(
 	if (N <= 4) return false;
 
 	// 取中点进行圆拟合 (抗噪)
-	std::vector<float> px(N), py(N);
+	vector<float> px(N), py(N);
 	for (size_t i = 0; i < N; ++i) {
 		px[i] = (WriteDataTemp[i].x + WriteDataTemp[i].x2) * 0.5f;
 		py[i] = (WriteDataTemp[i].y + WriteDataTemp[i].y2) * 0.5f;
@@ -3281,14 +3189,14 @@ bool StraightenWriteDataToCircle(
 	}
 
 	float A = Suu + Svv;
-	if (std::abs(A) < 1e-6f) return false;
+	if (abs(A) < 1e-6f) return false;
 	float B = 0.5f * (Suuu + Suuv + Suvv + Svvv);
 	float cx = mx + (Suuv * A - Suvv * B) / (A * A + 1e-6f);
 	float cy = my + (Suvv * A - Suu * B) / (A * A + 1e-6f);
 
 	// 计算平均半径
 	float meanR = 0.f;
-	for (size_t i = 0; i < N; ++i) meanR += std::sqrt((px[i] - cx) * (px[i] - cx) + (py[i] - cy) * (py[i] - cy));
+	for (size_t i = 0; i < N; ++i) meanR += sqrt((px[i] - cx) * (px[i] - cx) + (py[i] - cy) * (py[i] - cy));
 	meanR /= N;
 
 	if (meanR < minRadius) return false;
@@ -3297,8 +3205,8 @@ bool StraightenWriteDataToCircle(
 	float tol = meanR * toleranceRatio;
 	int outliers = 0;
 	for (size_t i = 0; i < N; ++i) {
-		float r = std::sqrt((px[i] - cx) * (px[i] - cx) + (py[i] - cy) * (py[i] - cy));
-		if (std::abs(r - meanR) > tol) ++outliers;
+		float r = sqrt((px[i] - cx) * (px[i] - cx) + (py[i] - cy) * (py[i] - cy));
+		if (abs(r - meanR) > tol) ++outliers;
 	}
 	// 离群点比例上限从 25% 收紧到 12%：椭圆各点半径差异大，会频繁超出收紧后的容差，
 	// 从而被判为离群，避免椭圆被强行拉成圆。
@@ -3309,8 +3217,8 @@ bool StraightenWriteDataToCircle(
 	// 只要首尾角度接近就误判为闭合圆（例如只画了 1/4 圈的弧，起止点却靠得很近）。
 	float sweep = 0.f;
 	for (size_t i = 1; i < N; ++i) {
-		float a0 = std::atan2(py[i - 1] - cy, px[i - 1] - cx);
-		float a1 = std::atan2(py[i] - cy, px[i] - cx);
+		float a0 = atan2(py[i - 1] - cy, px[i - 1] - cx);
+		float a1 = atan2(py[i] - cy, px[i] - cx);
 		float delta = a1 - a0;
 
 		// 归一化到 (-pi, pi]，避免跨越 ±pi 时出现 2pi 的假跳变
@@ -3321,7 +3229,7 @@ bool StraightenWriteDataToCircle(
 	}
 
 	// 累计增量可能为负（顺时针绘制），取绝对值即为实际扫过角度
-	float swept = std::abs(sweep);
+	float swept = abs(sweep);
 
 	// 采样过疏时，相邻点之间可能存在大跨度，导致扇形角丢失；
 	// 这里用"首尾直线距离 vs 弧长"做一次粗校验，防止窄扇形被当成整圆。
@@ -3331,17 +3239,17 @@ bool StraightenWriteDataToCircle(
 	// 【核心】独立投影 + 首尾微调
 	for (size_t i = 0; i < N; ++i) {
 		// 1. 内点 (x,y) 投影到平均半径
-		float ang1 = std::atan2(WriteDataTemp[i].y - cy, WriteDataTemp[i].x - cx);
-		WriteDataTemp[i].x = cx + meanR * std::cos(ang1);
-		WriteDataTemp[i].y = cy + meanR * std::sin(ang1);
+		float ang1 = atan2(WriteDataTemp[i].y - cy, WriteDataTemp[i].x - cx);
+		WriteDataTemp[i].x = cx + meanR * cos(ang1);
+		WriteDataTemp[i].y = cy + meanR * sin(ang1);
 
 		// 2. 外点 (x2,y2) 独立投影到平均半径 (不再人为加宽，消除交错)
-		float ang2 = std::atan2(WriteDataTemp[i].y2 - cy, WriteDataTemp[i].x2 - cx);
-		WriteDataTemp[i].x2 = cx + meanR * std::cos(ang2);
-		WriteDataTemp[i].y2 = cy + meanR * std::sin(ang2);
+		float ang2 = atan2(WriteDataTemp[i].y2 - cy, WriteDataTemp[i].x2 - cx);
+		WriteDataTemp[i].x2 = cx + meanR * cos(ang2);
+		WriteDataTemp[i].y2 = cy + meanR * sin(ang2);
 
 		// 3. 处理极短线段（若原x2y2与xy几乎重合，保持重合避免单点断裂）
-		float origLen = std::hypot(WriteDataTemp[i].x2 - WriteDataTemp[i].x, WriteDataTemp[i].y2 - WriteDataTemp[i].y);
+		float origLen = hypot(WriteDataTemp[i].x2 - WriteDataTemp[i].x, WriteDataTemp[i].y2 - WriteDataTemp[i].y);
 		if (origLen < 1e-4f) {
 			WriteDataTemp[i].x2 = WriteDataTemp[i].x;
 			WriteDataTemp[i].y2 = WriteDataTemp[i].y;
@@ -3352,7 +3260,7 @@ bool StraightenWriteDataToCircle(
 	// 追加约束：首尾间距需小于 0.05 倍半径，超过则视为开口弧（非闭合圆），不做拉齐，
 	// 避免把用户有意留出的缺口强行闭合。
 	if (N > 1) {
-		float gap = std::hypot(WriteDataTemp[0].x - WriteDataTemp[N - 1].x, WriteDataTemp[0].y - WriteDataTemp[N - 1].y);
+		float gap = hypot(WriteDataTemp[0].x - WriteDataTemp[N - 1].x, WriteDataTemp[0].y - WriteDataTemp[N - 1].y);
 		if (gap <= meanR * 0.2f) { // 首尾间距不大于5%半径才拉齐
 			float midX = (WriteDataTemp[0].x + WriteDataTemp[N - 1].x) * 0.5f;
 			float midY = (WriteDataTemp[0].y + WriteDataTemp[N - 1].y) * 0.5f;
@@ -3599,11 +3507,11 @@ void WriteSub(RenWin& window)
 			{
 				LastPoint = WritePos;
 
-				static int XOffset = -WindowSize.x / 800;
+				/*static int XOffset = -WindowSize.x / 800;
 				static int YOffset = XOffset;
 
 				LastPoint.x += XOffset;
-				LastPoint.y += YOffset;
+				LastPoint.y += YOffset;*/
 			}
 
 			// 坐标除以缩放，保证存入的是世界坐标
@@ -3614,8 +3522,8 @@ void WriteSub(RenWin& window)
 
 			if (PenW > Tool::PenSize / 2 && Tool::PenCap == 0)
 			{				
-				if (!WriteCamera::EnableWriteCamera) PenW -= 0.4 * scale;
-				else PenW -= 0.2 * scale;
+				if (!WriteCamera::EnableWriteCamera) PenW -= 0.4;
+				else PenW -= 0.2;
 			}
 
 			// 线宽按缩放比例存
@@ -3718,7 +3626,7 @@ void WriteSub(RenWin& window)
 
 			page.UnDoData.push({
 				static_cast<int>(data.size() - 1),
-				newRowCreated ? std::vector<WriteData>{} : data.back()
+				newRowCreated ? vector<WriteData>{} : data.back()
 				});
 
 			if(User::EnableFixShape)
@@ -3742,8 +3650,8 @@ void WriteSub(RenWin& window)
 
 			data.back().insert(
 				data.back().end(),
-				std::make_move_iterator(WriteDataTemp.begin()),
-				std::make_move_iterator(WriteDataTemp.end())
+				make_move_iterator(WriteDataTemp.begin()),
+				make_move_iterator(WriteDataTemp.end())
 			);
 
 			WriteDataTemp.clear();
@@ -4301,7 +4209,7 @@ void Write::UnDo()
 	if (undoStack.empty())
 		return;
 
-	auto node = std::move(undoStack.top());
+	auto node = move(undoStack.top());
 	undoStack.pop();
 
 	// 整页快照撤销（清屏）：直接把整页 Data 回填为清屏前的完整内容。
@@ -4309,7 +4217,7 @@ void Write::UnDo()
 	// 旧的 Index 已无意义。
 	if (!node.PageSnapshot.empty())
 	{
-		data = std::move(node.PageSnapshot);
+		data = move(node.PageSnapshot);
 		FlushWriteLayer = true;
 		return;
 	}
@@ -4327,7 +4235,7 @@ void Write::UnDo()
 
 			// 注意：擦除只从行内删元素，不会删行，故行下标在本次擦除期间保持稳定；
 			// 这里用「擦除前的整行内容」覆盖回该行即可完整还原。
-			data[row] = std::move(item.second);
+			data[row] = move(item.second);
 		}
 		FlushWriteLayer = true;
 		return;
@@ -4345,7 +4253,7 @@ void Write::UnDo()
 	// 修改行导致的撤销
 	else
 	{
-		data[node.Index] = std::move(node.UnDoData);
+		data[node.Index] = move(node.UnDoData);
 	}
 
 	FlushWriteLayer = true;
@@ -4374,7 +4282,7 @@ void Write::EraseAll()
 			node.UnDoData.clear();									// 置空：标记为整页快照分支
 			node.PageSnapshot = page.Data;							// 擦除前的整页内容拷贝
 
-			page.UnDoData.push(std::move(node));
+			page.UnDoData.push(move(node));
 		}
 	}
 
@@ -5125,7 +5033,7 @@ static bool ComputePageBounds(const PageDataS& pd, bool includeMindMap,
 	{
 		const ImageStruct& img = pd.Images[i];
 		if (img.w <= 0 || img.h <= 0) continue;
-		float diag = (float)std::hypot((double)img.w, (double)img.h) * 0.5f;
+		float diag = (float)hypot((double)img.w, (double)img.h) * 0.5f;
 		minX = min(minX, img.pos.x - diag);
 		maxX = max(maxX, img.pos.x + diag);
 		minY = min(minY, img.pos.y - diag);
@@ -5466,7 +5374,7 @@ void ShowQR(IMAGE& img,RenWin& window, ShareFile& Share)
 	XMsg::UpdateMsg(window);
 }
 
-void WriteFile::Save(RenWin& window,wstring path, std::wstring ExtName)
+void WriteFile::Save(RenWin& window,wstring path, wstring ExtName)
 {
 	wstring extLower = ExtName;
 	for (auto& ch : extLower) ch = (wchar_t)towlower(ch);
