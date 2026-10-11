@@ -4,7 +4,7 @@
 
 NOSTD; NOXS;
 
-Color User::MainColor = Color(190, 170, 255);
+Color User::MainColor = Color(170, 190, 255);
 Color User::BackColor = Color(33, 33, 33);
 bool User::EnableFixShape = true;
 bool User::EnableWriteAdjust = true;

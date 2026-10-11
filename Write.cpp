@@ -553,17 +553,18 @@ void main()
     // 有向距离 < 0 表示在笔画内部
     d -= uHalfW;
 
-    // 解析 AA 带宽：理论最优为"恰好一个像素宽"的盒式滤波覆盖率——
-    // fwidth(d) 给出 d 随屏幕空间一阶变化率，即距离场跨过 1 像素所需的 Δd。
-    // 关键质量优化（抗锯齿拉满）：
-    //  1) 过渡带宽度恒取 1.0·fwidth(d)，边缘覆盖率精确等于像素盒的解析积分，
-    //     这是解析 AA 的理论上限，再窄会欠采样（锯齿回归）、再宽只是模糊而非抗锯齿。
-    //  2) 不再用 uFeather 去"加宽"过渡带：加宽只会把锐利边缘糊掉，降低有效对比度，
-    //     并不是更强的抗锯齿。uFeather 从"加宽项"改为"下限保护项"，只用于
-    //     极端自适应细分导致 fwidth 塌缩到亚像素（除法趋近 0）时兜底，防止带宽过窄。
-    //  3) max() 取二者较大值：fwidth 正常时以解析带宽为准（理论最优），
-    //     fwidth 异常小时以 uFeather 兜底（稳定），同时规避除零。
-    float aa = max(fwidth(d), max(uFeather, 1e-4));
+    // 解析 AA 带宽：理论最优为"恰好一个像素宽"的盒式滤波覆盖率。
+    // 关键修复（斜向各向同性 AA）：
+    //   原先用 fwidth(d) 求带宽，fwidth = |dd/dx| + |dd/dy| 是"夹角和"范数，
+    //   对本项目常见的斜向笔迹会引入方向偏置：
+    //     - "\"（左上→右下）时 d 沿 x、y 的变化同号，两项相加被放大 → 带宽过宽，
+    //       过渡带拉长 → 边缘发虚/色阶明显（表现为"锯齿"感）；
+    //     - "/"（左下→右上）时两项反号相消 → 带宽偏窄但恰好接近真值，故看起来平滑。
+    //   这正是"/ 平滑、\ 锯齿"的不对称来源。
+    //   改用梯度模长 length(vec2(dFdx(d), dFdy(d)))，它是旋转不变的各向同性范数，
+    //   对任意角度都给出恒等于"1 像素"的过渡带宽度，消除方向偏置。
+    //   其余保护逻辑保持不变：uFeather 仅作下限兜底（防 fwidth 塌缩到亚像素时带宽过窄）。
+    float aa = max(length(vec2(dFdx(d), dFdy(d))), max(uFeather, 1e-4));
 
     // 关键质量优化：用五次（quintic）Hermite 平滑替代三次，C2 连续、两端一阶导为 0，
     // 边缘衰减比三次更接近理想 step，彻底消除线性/三次过渡残留的可见色阶。
@@ -5429,7 +5430,7 @@ void ShowQR(IMAGE& img,RenWin& window, ShareFile& Share)
 		WS_EX_TOPMOST);
 	SetWindowPos(QRWindow.getNativeHandle(), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
-	static float Scale = WindowSize.x / 5 / (float)img.w;
+	static float Scale = WindowSize.x / 8 / (float)img.w;
 
 	while (XMsg::IsOpen(QRWindow))
 	{
@@ -5445,7 +5446,7 @@ void ShowQR(IMAGE& img,RenWin& window, ShareFile& Share)
 		XImage::PutScaleImage(img, WindowSize.x / 4, WindowSize.y / 4, Scale, Scale, QRWindow, 0.5, 0.5);
 
 		XGraph::SetColor(User::MainColor);
-		static int w = WindowSize.x / 5, h = WindowSize.x / 5;
+		static int w = WindowSize.x / 8, h = WindowSize.x / 8;
 		static int lw = WindowSize.x / 200;
 		static int r = WindowSize.x / 200;
 		XGraph::LineShape::SetLineWidth(lw);
@@ -5499,6 +5500,8 @@ void WriteFile::Save(RenWin& window,wstring path, std::wstring ExtName)
 		}
 		else
 		{
+			ShellExecuteW(NULL, L"open", L"MiuBarrdLoader.exe", NULL, NULL, false);
+
 			int saved = SaveAsImage(path, L"png");
 
 			if (saved > 0)
@@ -5507,8 +5510,6 @@ void WriteFile::Save(RenWin& window,wstring path, std::wstring ExtName)
 
 				if(XFile::Exists(path + L"\\1.png"))
 				{
-					ShellExecuteW(NULL, L"open", L"MiuBarrdLoader.exe", NULL, NULL, false);
-
 					Share.start(path + L"\\1.png");
 					Share.startTunnel();
 
@@ -5561,6 +5562,14 @@ void WriteFile::Save(RenWin& window,wstring path, std::wstring ExtName)
 				Message::ShowMessage("由于文件内容配置不当导致保存失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
 				XWindow::SetBackGroundColor(User::BackColor);
 			}
+
+			HWND hWnd = FindWindowW(NULL, L"MiuBarrdLoader");
+			if (IsWindow(hWnd))
+			{
+				// 发送关闭消息
+				SendMessageW(hWnd, WM_CLOSE, 0, 0);
+			}
+
 			return;
 		}
 	}

@@ -202,7 +202,7 @@ struct BackRound
 };
 static const int BACKROUND_R_SPEED = 8;
 static const int BACKROUND_ALPHA_SPEED = 3;
-static const int BACKROUND_STARTALPHA = 200;
+static const int BACKROUND_STARTALPHA = 220;
 
 //UI
 #pragma region MyRegion

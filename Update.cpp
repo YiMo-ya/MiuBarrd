@@ -61,7 +61,8 @@ public:
 		const std::string& text,
 		const std::vector<Color>& colorList,
 		int frame, int totalFrame,
-		int fadeInFrame, int fontsize, RenderWindow& window
+		int fadeInFrame, int fontsize, RenderWindow& window,
+		bool playing = true
 	) {
 		auto chars = Utf8Split(text);
 		int len = static_cast<int>(chars.size());
@@ -76,15 +77,22 @@ public:
 			totalWidth += charWidths[i];
 		}
 
-		int drawX = x - totalWidth / 2;
+		int startX = x - totalWidth / 2;
 		int intervalFrame = max(1, (totalFrame - fadeInFrame) / (len + 2));
 
-		for (int i = 0; i < len; ++i) {
+		// 字符绘制顺序：从右往左遍历，使最左侧（i 最大）的字符最先开始动画，
+		// 从而“左边的字先出来、也先回收”
+		for (int i = len - 1; i >= 0; --i) {
 			int charAlpha = 255;
 			float FontSize = (float)fontsize; // 默认正常字号
 
-			if (!down) {
+			// 用本次调用的 playing 参数判断方向，而非全局 down：
+			// 新旧两条文本同时绘制时，全局 down 已为 true，
+			// 会让正在展开的下一条误走滑出分支、方向反转
+			if (playing) {
 				// ---- 滑入：0 → fontsize ----
+				// 展开与回收统一为“从左往右”推进：i 越小越靠左、越先触发，
+				// 因此这里与回收分支一样使用 i 的自然序计算延时
 				int charFrame = frame - i * intervalFrame;
 
 				if (charFrame <= 0) {
@@ -101,6 +109,9 @@ public:
 			}
 			else {
 				// ---- 滑出：fontsize → 0 ----
+				// 回收阶段 frame 递减、outFrame = totalFrame - frame 递增，
+				// 要让字符自左向右依次收回，触发顺序需与滑入时相反，
+				// 故此处用 i 的自然序（i 越小越靠左、越先触发）计算延时
 				int outFrame = totalFrame - frame;
 				int charOutFrame = outFrame - i * intervalFrame;
 
@@ -137,8 +148,12 @@ public:
 				tempY += fontsize / 3;
 			}
 
-			XText::Xyprintf(drawX, tempY, chars[i], window);
-			drawX += charWidths[i];
+			// 该字符在整行中的横坐标偏移：按字符索引累加前序字符宽度，
+			// 保证即使遍历顺序相反，字符仍落在正确的位置上，字序不会倒置
+			int charX = startX;
+			for (int k = 0; k < i; ++k) charX += charWidths[k];
+
+			XText::Xyprintf(charX, tempY, chars[i], window);
 		}
 	}
 };
@@ -167,7 +182,6 @@ int ChangeInt(int v, int speed, int Min, int Max)
 //绘制问好文字
 void DrawHelloText(RenWin& window,bool& isExit)
 {
-
 	static int frame = 999;
 	static int totalframe = 0;
 	static int SleepFrame = 0;
@@ -195,6 +209,43 @@ void DrawHelloText(RenWin& window,bool& isExit)
 	static int textnum;
 
 	static bool init = false;
+
+	// ---- 交叉过渡状态：上一条刚开始收缩时，下一条立刻同步展开 ----
+	static bool showNext = false;       // 下一条是否正在展开（与上一条的收缩同时进行）
+	static int nextFrame = 0;           // 下一条的展开进度帧
+	static int nextTotalframe = 0;      // 下一条的总帧数
+	static string nextText;             // 下一条文本内容
+	static vector<Color> nextColorNow;  // 下一条文本的渐变色
+	static int nextDelayFrame = 0;      // 下一条真正开始展开前的延迟帧数（等待这段时间再展开）
+
+	// 本条展开结束后、真正开始收缩之前的停留帧数
+	const int HOLD_FRAMES = 15;
+
+	// 上一条开始收缩后，下一条额外等待的帧数。
+	// 让当前文本先回收一部分、屏幕上留出空隙，下一条再展开，避免新旧文字过于拥挤
+	const int NEXT_DELAY_FRAMES = 15;
+
+	// 抽取一条与当前内容不同的文本，避免连续重复
+	auto PickAnotherText = [&]() -> int {
+		int temp = textnum;
+		while (temp == textnum) temp = RandomInt(0, 12);
+		return temp;
+	};
+
+	// 生成一组不重复的渐变色
+	auto MakeColors = [&]() -> vector<Color> {
+		vector<Color> res;
+		while (res.size() < 4) {
+			Color candidate = XColor::LightColor(User::MainColor, RandomInt(0, 3) / 10.0);
+			bool exists = false;
+			for (const auto& c : res) {
+				if (c == candidate) { exists = true; break; }
+			}
+			if (!exists) res.push_back(candidate);
+		}
+		return res;
+	};
+
 	if(!init)
 	{
 		static int ColorNum = 4;
@@ -214,47 +265,48 @@ void DrawHelloText(RenWin& window,bool& isExit)
 		init = true;
 	}
 
-	if (frame > totalframe && !down) // 展开动画结束，准备进入收回动画
+	if (frame > totalframe && !down) // 本条文本已完全展开
 	{
-		SleepFrame = 15; // 展示停留时间
-		down = true;
+		// 停留阶段：本条文本完整显示，等待 HOLD_FRAMES 帧后再开始收缩
+		if (SleepFrame > 0) SleepFrame--;
+		else if (!showNext)
+		{
+			// 停留结束：本条开始收缩的同时，立刻启动下一条的展开，
+			// 两条文本此后各自独立推进，让新旧在屏幕上有一段明显的重叠
+			SleepFrame = 0;
+			down = true;
+
+			if (!isExit)
+			{
+				nextText = TextList[PickAnotherText()];
+				nextColorNow = MakeColors();
+				nextTotalframe = PutTextSay::Utf8Split(nextText).size() * 8;
+				nextFrame = 0;
+				nextDelayFrame = NEXT_DELAY_FRAMES; // 先进入延迟等待，下一条暂不展开
+				showNext = true;
+			}
+		}
 	}
-	else if (frame < 0 && down) // 收回动画结束，准备进入下一轮
+	else if (showNext && nextFrame > nextTotalframe && down) // 下一条已完全展开
 	{
 		if (!isExit)
 		{
-			SleepFrame = 0; // 收回后停留时间
-			down = false;
+			// 下一条接管为当前内容；此时上一条早已收缩归零，重叠自然结束
+			text = nextText;
+			ColorNow = nextColorNow;
+			totalframe = nextTotalframe;
+			frame = totalframe + 1; // 直接视作“已完全展开”，进入停留阶段
 
-			// 切换新内容
-			int ColorNum = 4;
-			ColorNow.clear();
-			while (ColorNow.size() < ColorNum) {
-				Color candidate = XColor::LightColor(User::MainColor, RandomInt(0, 3) / 10.0);
-				bool exists = false;
-				for (const auto& c : ColorNow) {
-					if (c == candidate) {
-						exists = true;
-						break;
-					}
-				}
-				if (!exists) {
-					ColorNow.push_back(candidate);
-				}
-			}
-			int temp = -1;
-
-			while (1)
+			// 同步 textnum，保证下一轮抽签的“避免重复”逻辑依然有效
+			for (int i = 0; i < 13; i++)
 			{
-				temp = RandomInt(0, 12);
-				if (textnum != temp) break;
+				if (TextList[i] == text) { textnum = i; break; }
 			}
 
-			text = TextList[temp];
-			textnum = temp;
-
-			frame = 0;
-			totalframe = PutTextSay::Utf8Split(text).size() * 8;
+			SleepFrame = HOLD_FRAMES;
+			down = false;
+			showNext = false;
+			nextFrame = 0;
 		}
 	}
 	else if (SleepFrame > 0)
@@ -276,10 +328,28 @@ void DrawHelloText(RenWin& window,bool& isExit)
 		}
 	}
 
+	// 下一条的展开进度独立推进，与上一条的收缩互不干扰
+	if (showNext)
+	{
+		// 先消耗延迟帧，延迟结束后下一条才开始真正展开
+		if (nextDelayFrame > 0) nextDelayFrame--;
+		else if (nextFrame <= nextTotalframe) nextFrame++;
+	}
+
+	// 当前文本按其自身状态播放：展开时用滑入，收缩时用滑出
 	PutTextSay::Draw(
 		WindowSize.x / 2,
 		WindowSize.y / 2,
-		text, { ColorNow }, frame, totalframe, 40, ScreenSize.x / 40, window);
+		text, { ColorNow }, frame, totalframe, 40, ScreenSize.x / 40, window, !down);
+
+	// 上一条还没收回完时，叠加绘制正在展开的下一条，形成新旧交叉过渡
+	if (showNext)
+	{
+		PutTextSay::Draw(
+			WindowSize.x / 2,
+			WindowSize.y / 2,
+			nextText, { nextColorNow }, nextFrame, nextTotalframe, 40, ScreenSize.x / 40, window, true);
+	}
 
 	if(isExit) SleepFrame = 0;
 }
@@ -487,31 +557,89 @@ void DrawMicaBackground(
             vec2 uv = gl_FragCoord.xy / u_resolution.xy;
             float t = u_time * u_speed * 0.3;
 
-            // 从 baseColor 派生两个辅助色
-            vec3 colA = u_baseColor * 0.4;                    // 深
-            vec3 colB = u_baseColor;                          // 主色
-            vec3 colC = clamp(u_baseColor * 1.25 + 0.08, 0.0, 1.0); // 亮
+            // 从 baseColor 派生出底色与高亮色，保证与主题色一致
+            vec3 colDark = u_baseColor * 0.25;                          // 顶部/整体深色底
+            vec3 colBase = u_baseColor;                                 // 主色
+            vec3 colGlow = clamp(u_baseColor * 1.6 + 0.25, 0.0, 1.0);    // 底部发光亮色
 
-            // 三个缓慢移动的渐变中心
-            vec2 c1 = vec2(0.3, 0.4) + vec2(sin(t * 0.7) * 0.2, cos(t * 0.5) * 0.15);
-            vec2 c2 = vec2(0.7, 0.6) + vec2(cos(t * 0.4) * 0.25, sin(t * 0.6) * 0.2);
-            vec2 c3 = vec2(0.5, 0.8) + vec2(sin(t * 0.3) * 0.15, cos(t * 0.8) * 0.1);
+            // 底部发光核心：光源被移到屏幕下边缘之外（uv.y < 0），
+            // 因此屏幕内越靠近下边缘越亮，形成“光从屏幕下方透上来”的辉光。
+            // 这里用 (1.0 + offset - uv.y) 让衰减曲线的峰值落在屏幕外，
+            // pow 指数取 1.6（比原来更低）使亮区向上铺得更远，过渡更长更柔。
+            const float glowOffset = 0.10;                    // 光源位于屏幕下方 0.10 个屏幕高度处
+            float bottom = pow(max(1.0 + glowOffset - uv.y, 0.0) / (1.0 + glowOffset), 2.0);
 
-            float d1 = 1.0 - smoothstep(0.0, 0.9, length(uv - c1));
-            float d2 = 1.0 - smoothstep(0.0, 0.8, length(uv - c2));
-            float d3 = 1.0 - smoothstep(0.0, 0.7, length(uv - c3));
+            // ---- 流动感核心：几个圆形光斑沿底缘横向漂移 ----
+            // 关键点：光源是「圆形」的径向光团（而非沿 x 拉伸的长条），
+            // 因此亮度按到光斑圆心的二维距离衰减；每个光斑沿 x 轴移动，
+            // 并把拖尾方向（运动后方）按同样的圆形距离渐隐，形成彗尾式动态模糊。
+            // 用「非等比坐标」计算距离：x 方向尺度小、y 方向尺度大，
+            // 使光斑在屏幕上呈现为竖直略扁的圆，而非一条横线。
+            float streak = 0.0;
 
-            vec3 color = colA;
-            color = mix(color, colB, d1 * 0.7);
-            color = mix(color, colC, d2 * 0.5);
-            color = mix(color, colB, d3 * 0.4);
+            // 单个圆形光斑：center 为圆心（随 t 沿 x 漂移），y 固定在底缘附近；
+            // scaleX/scaleY 控制光斑的横向/纵向半径，决定它是「圆」还是「线」。
+            // 采用二维距离的平滑衰减，得到真正的径向圆形辉光。
+            // 三条光斑速度/相位/大小都不同，避免同步的机械感。
 
-            // 极轻暗角
+            // 光斑 1：主光斑，快速右移，拖尾较长
+            // 注意 cy* 均为负值：把三个光斑的圆心全部放到屏幕下边缘之外，
+            // 屏幕内只会看到它们向上扩散出来的辉光，而不是完整的光球本身。
+            float cx1 = fract(0.15 + 0.10 * t);        // 用 fract 让圆心循环，避免移出视野
+            float cy1 = -0.15;                          // 圆心在屏幕下方之外
+            float rad1 = 0.6;                          // 扩大光斑半径（原 0.07）
+            vec2  d1 = vec2(uv.x - cx1, (uv.y - cy1) * 0.70); // 纵向压缩比例调小 -> 辉光沿 y 扩散范围更大
+            d1.x -= floor(d1.x + 0.5);                  // 只对 x 环绕到 [-0.5,0.5]，保证跨边界平滑
+            float base1 = 1.0 - smoothstep(0.0, rad1, length(d1)); // 二维径向核心亮斑
+            // 拖尾：在运动后方（这里取 d1.x>0 一侧）沿同样的径向距离渐隐，形成圆形慧尾
+            float asym1 = mix(0.45, 1.0, 1.0 - smoothstep(0.0, rad1 * 2.4, max(d1.x, 0.0)));
+            streak += 0.85 * base1 * asym1;
+
+            // 光斑 2：次光斑，反向移动，速度较慢
+            float cx2 = fract(0.62 - 0.13 * t);
+            float cy2 = -0.15;                          // 更深地置于屏幕下方之外
+            float rad2 = 0.4;                          // 扩大光斑半径（原 0.055）
+            vec2  d2 = vec2(uv.x - cx2, (uv.y - cy2) * 0.70);
+            d2.x -= floor(d2.x + 0.5);
+            float base2 = 1.0 - smoothstep(0.0, rad2, length(d2));
+            // 反向移动 -> 拖尾在另一侧
+            float asym2 = mix(0.55, 1.0, 1.0 - smoothstep(0.0, rad2 * 2.0, max(-d2.x, 0.0)));
+            streak += 0.60 * base2 * asym2;
+
+            // 光斑 3：小高光点，慢速，最锐利
+            float cx3 = fract(0.30 + 0.06 * t);
+            float cy3 = -0.1;                          // 圆心在屏幕下方之外
+            float rad3 = 0.3;                          // 扩大光斑半径（原 0.035）
+            vec2  d3 = vec2(uv.x - cx3, (uv.y - cy3) * 0.70);
+            d3.x -= floor(d3.x + 0.5);
+            float base3 = 1.0 - smoothstep(0.0, rad3, length(d3));
+            float asym3 = mix(0.25, 1.0, 1.0 - smoothstep(0.0, rad3 * 2.6, max(d3.x, 0.0)));
+            streak += 0.45 * base3 * asym3;
+
+            // 光斑沿线分布不均：让某些位置的亮斑被削弱，
+            // 于是同一时刻只有部分区域有明显高光，其余区域接近无光，强化「漂移」的感觉。
+            float mask = 0.35 + 0.65 * (0.5 + 0.5 * sin(t * 0.4 + uv.x * 1.5));
+            streak *= mask;
+
+            // clamp 防止三个光斑叠加处过曝
+            streak = clamp(streak, 0.0, 1.0);
+
+            // 亮斑只在靠近底缘处出现：把底部辉光的高度当作纵向包络，
+            // 避免整片下半区都在发光。包络范围放宽（0.55 -> 0.85）
+            // 以适应光源外移后更大的扩散区间。
+            float band = smoothstep(0.0, 0.85, bottom);
+
+            float glow = bottom * band * streak;
+
+            vec3 color = mix(colDark, colBase, bottom * 0.9);        // 整体自下而上的主色过渡
+            color = mix(color, colGlow, glow * 0.8);                 // 底部叠加发光高亮
+
+            // 极轻暗角，保持与原有风格一致
             color *= 1.0 - 0.15 * length(uv - 0.5);
 
             gl_FragColor = vec4(color, 1.0);
         }
-)";
+	)";
 
 	if (!shaderLoaded)
 	{
@@ -666,6 +794,8 @@ void Hello(RenWin& window)
 
 	XWindow::SetBackGroundColor(User::BackColor);
 
+	static int StartClock = 0;
+
 	while (!XMsg::IsClose(window))
 	{
 		if (isExit && backAlpha >= 255) break;
@@ -684,13 +814,13 @@ void Hello(RenWin& window)
 			isExit = true;
 		}
 
-		static Color BackColor = XColor::DarkColor(User::MainColor, 0.2);
-		DrawMicaBackground(window, 7.0, BackColor);
+		DrawMicaBackground(window, 4.5, User::MainColor);
 
 		DrawHelloText(window,isExit);
 
 		XText::SetFontColor(User::MainColor);
-		XText::SetFontSize(25 * ScreenScale);
+		static int FontSize = WindowSize.x / 45;
+		XText::SetFontSize(FontSize);
 		XText::SetFontAdjust(ADJUST_CENTER, ADJUST_TOP);
 		XText::Xyprintf(WindowSize.x / 2, WindowSize.y * 3 / 4, "点击任意区域继续", window);
 
@@ -720,7 +850,7 @@ void Hello(RenWin& window)
 
 void ShowUpdate(RenWin& window)
 {
-	Update(window);
+	//Update(window);
 	Hello(window);
 }
 
