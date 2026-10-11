@@ -2555,66 +2555,6 @@ public:
 
 	bool Visible = false;
 
-	void DrawBack(RenWin& window)
-	{
-		static RenderTexture rtb;
-
-		static Vector2i TempSize;
-		if (TempSize.x != size.x.value + 2 || TempSize.y != size.y.value + 2)
-		{
-			rtb.resize(FTU({ size.x.value + 2,size.y.value + 2 }));
-
-			TempSize = { (int)size.x.value,(int)size.y.value };
-		}
-
-		static vector<BackRound> BackRound_;
-
-		rtb.clear(Color::Transparent);
-
-		if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft) && Tool::IsInBar)
-		{
-			static Vector2i MousePosTemp;
-			Vector2i MousePos = XMsg::MouseMsg::GetMousePosWindow();
-
-			//坐标不等，添加
-			if (MousePosTemp.x != MousePos.x || MousePosTemp.y != MousePos.y)
-			{
-				BackRound_.push_back({ MousePos.x,MousePos.y,0,BACKROUND_STARTALPHA});
-			}
-		}
-
-		for (int i = 0; i < BackRound_.size(); i++)
-		{
-			auto& back = BackRound_[i];
-			static int Speed = BACKROUND_R_SPEED * ScreenScale;
-			back.r += Speed;
-			if (back.a - BACKROUND_ALPHA_SPEED > 0) back.a -= BACKROUND_ALPHA_SPEED;
-			else
-			{
-				swap(BackRound_[i], BackRound_.back());
-				BackRound_.pop_back();
-
-				i -= 1;
-				continue;
-			}
-
-			Color FillColor = User::MainColor;
-			FillColor.a = back.a;
-			XGraph::SetFillColor(FillColor);
-			int Drawx = back.x - pos.x.value + 1, Drawy = back.y - pos.y.value + 1;
-			XGraph::CircleShape::FillCircle_WithoutBorder(Drawx, Drawy, back.r, rtb);
-		}
-
-		rtb.display();
-		RoundRenderTexture(rtb, RoundSize);
-
-		Sprite s(rtb.getTexture());
-
-		s.setPosition({ pos.x.value - 1,pos.y.value - 1 });
-		s.setColor(Color(255, 255, 255, UIAlpha));
-		window.draw(s);
-	}
-
 	void Draw(RenWin& window)
 	{
 		//初始化
@@ -2712,8 +2652,6 @@ public:
 
 		//大于可视返回，跳过绘制
 		if (pos.y.value > WindowSize.y - BasicSize) return;
-
-		if(User::EnableBack) DrawBack(window);
 
 		//插件实时绘制
 		DrawGlassBar(pos.x.value, pos.y.value, size.x.value, size.y.value, RoundSize, window);

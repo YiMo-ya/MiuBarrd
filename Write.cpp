@@ -394,6 +394,11 @@ struct WriteData
 	bool Light = false;
 
 	bool TempLayer = false;
+
+	// 贝塞尔曲线展开后的采样点（世界坐标，首元素为 x/y、末元素为 x2/y2）。
+	// 由 WriteSub 在落笔时一次性算好；绘制阶段只按这些点连线段，不再做任何坐标变换。
+	// 为空时表示本段未参与曲线平滑，绘制退化为单条 from→to 直线。
+	vector<Vector2f> CurvePts;
 };
 
 //临时书写数据
@@ -476,19 +481,43 @@ void main()
 {
     vec2 p = gl_TexCoord[0].xy;
 
+    // 覆盖半径：半线宽 + AA/羽化带宽 + 1px 余量。
+    // 用于两块优化：
+    //  1) 逐线段包围盒剔除（落在半径外的线段不可能影响本像素）；
+    //  2) 循环结束后若最近距离仍超出该半径，可直接 discard，省去开方与混合。
+    // 半径必须不小于真实绘制范围（uHalfW + AA 带宽），否则会把笔迹边缘/端点帽误剔除。
+    float aa0 = max(uFeather, 0.75);
+    float r   = uHalfW + aa0 + 1.0;
+    float r2  = r * r;
+
     float d2 = 1e18;
 
-    for (int i = 0; i < 256; i++)
+    // 逐线段求"点到线段距离的平方"，只保留最小值。
+    // 优化要点：
+    //  1) 循环上界直接用 uCount，去掉每像素一次 if(i>=uCount) 判断；
+    //  2) 先用线段 AABB（按 r 外扩）做廉价剔除，把绝大多数线段挡在 dot/clamp 之前；
+    //  3) 循环内只算平方距离，仅在最后对最近的一条开方，省掉每线段一次 sqrt。
+    for (int i = 0; i < uCount; i++)
     {
-        if (i >= uCount) break;
+        vec2 a = uSegs[i * 2];
+        vec2 b = uSegs[i * 2 + 1];
 
-        vec2 pa = p - uSegs[i * 2];
-        vec2 ba = uSegs[i * 2 + 1] - uSegs[i * 2];
+        // 包围盒剔除：AABB 按 r 外扩后，盒外像素到该线段的距离必然 > r，
+        // 不可能改变最终 alpha，直接跳过。判定用严格大于/小于，保证边界像素不被误剔。
+        vec2 lo = min(a, b) - vec2(r);
+        vec2 hi = max(a, b) + vec2(r);
+        if (p.x < lo.x || p.x > hi.x || p.y < lo.y || p.y > hi.y) continue;
+
+        vec2 pa = p - a;
+        vec2 ba = b - a;
         float denom = dot(ba, ba);
         float h = denom > 1e-6 ? clamp(dot(pa, ba) / denom, 0.0, 1.0) : 0.0;
         vec2 diff = pa - ba * h;
         d2 = min(d2, dot(diff, diff));
     }
+
+    // 所有线段都被剔除（或本就离笔迹很远）时提前退出，省掉后续开方与着色混合。
+    if (d2 >= r2) discard;
 
     // 只在最后对"最近的一条"开方，得到精确有向距离
     float d = sqrt(d2);
@@ -565,7 +594,7 @@ public:
 		m_shader.setUniform("uHalfW", halfW);
 		m_shader.setUniform("uCount", segCount);
 		m_shader.setUniform("uAlpha", alpha);
-		float feather = halfW * 0.5f;
+		float feather = halfW * 0.4f;
 		if (feather > 1.5f) feather = 1.5f;
 		if (feather < 0.6f) feather = 0.6f;
 		m_shader.setUniform("uFeather", feather);
@@ -678,6 +707,13 @@ static const int BEZIER_MAX_SUBDIV = 16;
 // 徒增线段数量而画面上无任何可见差异。
 static const float BEZIER_MIN_SEG_LEN = 1.5f;
 
+// 曲线控制点最小臂长（像素）。
+// 之所以给出下限：快速书写时相邻采样点可能极其接近（甚至重合），
+// 此时 Catmull-Rom 切线长度趋近于 0，控制点退化到端点上，
+// 曲线在本段内部会先「压平」再突然拐向下一段，产生可见抖动。
+// 用该阈值兜底，保证控制点始终远离端点，曲线至少保持一段平滑的出入切线。
+static const float BEZIER_MIN_ARM = 1.f;
+
 /// <summary>
 /// 三次贝塞尔曲线求值（De Casteljau 展开式，直接代入伯恩斯坦基）。
 /// </summary>
@@ -725,10 +761,13 @@ static int BezierSubdivCount(Vector2f p0, Vector2f p1, Vector2f p2, Vector2f p3)
 /// <summary>
 /// 把上一段笔迹的终点与当前新笔迹用三次贝塞尔曲线平滑衔接。
 /// 
-/// 采用「Catmull-Rom 转贝塞尔」的参数化：以 (prev, from, to) 三点构造切线，
-/// 切线取相邻点连线方向（端点做单边差分），再按 1/3 缩放为贝塞尔控制臂长。
-/// 这样生成的曲线经过 from 与 to，且在 prev 处与上一段相切，
-/// 相邻两段因此在连接点处一阶连续（C1），折线感被彻底消除。
+/// 采用标准「Catmull-Rom 转贝塞尔」的参数化：四点 prev / from / to / next 决定
+/// 本段的三次贝塞尔控制点：
+///     p1 = from + (to   - prev) / 6
+///     p2 = to   - (next - from) / 6
+/// 其中 prev 是「与本段起点重合的邻点」（上一段的终点），
+/// next 是「与本段终点重合的邻点」（下一段的起点）。
+/// 这样曲线经过 from 与 to，且在连接点处切线方向与相邻段一致（C1），折线感被消除。
 /// 
 /// 之所以不直接用二次贝塞尔：二次曲线在两段衔接处只能保证 C0 连续，
 /// 快速书写时仍会看到明显的折角；三次曲线把切线也纳入控制，
@@ -736,21 +775,24 @@ static int BezierSubdivCount(Vector2f p0, Vector2f p1, Vector2f p2, Vector2f p3)
 /// </summary>
 /// <param name="from">本段笔迹起点（屏幕坐标）。</param>
 /// <param name="to">本段笔迹终点（屏幕坐标）。</param>
-/// <param name="prev">上一段的起点；无上一段时传与 from 相同的点（退化为直线）。</param>
-/// <param name="next">下一段的终点；无下一段时传与 to 相同的点（退化为直线）。</param>
+/// <param name="prev">上一段的终点（与本段起点重合）；无上一段时传与 from 相同的点（退化为直线）。</param>
+/// <param name="next">下一段的起点（与本段终点重合）；无下一段时传与 to 相同的点（退化为直线）。</param>
 /// <param name="outSegs">输出：细分后折线的采样点，首元素为 from，末元素为 to。</param>
 static void BezierSmoothSegment(Vector2f from, Vector2f to, Vector2f prev, Vector2f next,
                                 vector<Vector2f>& outSegs)
 {
     outSegs.clear();
 
-    // 切线方向：取自相邻点连线；单一控制点时退化为零向量，此时控制点回落到端点，
-    // 曲线自动退化为直线段——无需额外分支处理起笔/收笔。
-    Vector2f tangentPrev((to.x - prev.x) / 6.f, (to.y - prev.y) / 6.f);
-    Vector2f tangentNext((next.x - from.x) / 6.f, (next.y - from.y) / 6.f);
-
-    Vector2f p1(from.x + tangentPrev.x, from.y + tangentPrev.y);
-    Vector2f p2(to.x - tangentNext.x, to.y - tangentNext.y);
+    // Catmull-Rom 切线：p1 沿「prev→to」方向、p2 沿「from→next」方向，各取 1/6 臂长。
+    // 当 prev 与本段起点重合（首段）时 (to - prev) == (to - from)，方向正确；
+    // 当 next 与本段终点重合（尾段）时 (next - from) == (to - from)，方向正确；
+    // 两种情况都退化为直线，无需额外分支处理起笔/收笔。
+    //
+    // 关键约束：本函数只做「坐标计算」，输入 from/to/prev/next 必须是调用方
+    // 已经换算好的目标坐标系（屏幕像素）坐标；输出的采样点会被直接送入绘制，
+    // 绘制阶段不得再做任何坐标变换，避免曲线被二次变换导致端点漂移与精度损失。
+    Vector2f p1(from.x + (to.x   - prev.x) / 6.f, from.y + (to.y   - prev.y) / 6.f);
+    Vector2f p2(to.x   - (next.x - from.x) / 6.f, to.y   - (next.y - from.y) / 6.f);
 
     int n = BezierSubdivCount(from, p1, p2, to);
 
@@ -763,32 +805,37 @@ static void BezierSmoothSegment(Vector2f from, Vector2f to, Vector2f prev, Vecto
 }
 
 /// <summary>
-/// 把一段直线笔迹展开为贝塞尔曲线并压入 SDF 批次。
+/// 把一段笔迹的曲线采样点压入 SDF 批次。
 /// 
-/// 与直接 SDFBatchPush(from→to) 的区别：中间插入若干曲线采样点，
-/// 使相邻线段沿曲线排布而非沿折线排布。
+/// 采样点由 WriteSub 在落笔阶段预先算好并存入 WriteData::CurvePts（世界坐标），
+/// 本函数只负责把它们换算到目标像素坐标后逐段提交，不做任何曲线求值。
 /// 调用方必须已用 SDFBatchBegin 选好颜色/线宽，本函数不修改批次参数。
 /// </summary>
 /// <param name="target">绘制目标。</param>
-/// <param name="from">起点（目标像素坐标）。</param>
-/// <param name="to">终点（目标像素坐标）。</param>
-/// <param name="prev">上一段起点，用于构造起点切线。</param>
-/// <param name="next">下一段终点，用于构造终点切线。</param>
-static void SDFBatchPushBezier(sf::RenderTarget& target,
-                               Vector2f from, Vector2f to,
-                               Vector2f prev, Vector2f next)
+/// <param name="pts">曲线采样点（世界坐标），空或单点时退化为直线。</param>
+/// <param name="from">回退起点（目标像素坐标）。</param>
+/// <param name="to">回退终点（目标像素坐标）。</param>
+/// <param name="scale">当前页面缩放系数。</param>
+/// <param name="camPos">当前相机位置（世界坐标）。</param>
+static void SDFBatchPushCurve(sf::RenderTarget& target,
+                              const vector<Vector2f>& pts,
+                              Vector2f from, Vector2f to,
+                              float scale, const Vector2i& camPos)
 {
-    static vector<Vector2f> pts;
-    BezierSmoothSegment(from, to, prev, next, pts);
-
+    // 无曲线采样点时退化为单段直线，保证起笔/收笔与未启用平滑时表现一致
     if (pts.size() < 2)
     {
         SDFBatchPush(target, from.x, from.y, to.x, to.y);
         return;
     }
 
+    // 世界坐标 → 目标像素坐标，仅做一次线性变换，变换结果直接用于提交线段
     for (size_t i = 0; i + 1 < pts.size(); ++i)
-        SDFBatchPush(target, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
+    {
+        SDFBatchPush(target,
+            (pts[i].x + camPos.x) * scale, (pts[i].y + camPos.y) * scale,
+            (pts[i + 1].x + camPos.x) * scale, (pts[i + 1].y + camPos.y) * scale);
+    }
 }
 
 #pragma endregion
@@ -2774,20 +2821,12 @@ void DrawLayer(RenderTarget& window)
 								SDFBatchBegin(data.color, halfW, shouldBeLight ? (150.f / 255.f) : 1.f);
 							}
 
-							// 用贝塞尔曲线平滑本段：取上一条笔迹起点作 prev、下一条笔迹终点作 next
-							// 构造切线，使相邻段在连接点处一阶连续，消除折线感。
-							// 边界（首/尾段）用自身端点填充相邻点，曲线自动退化为直线，无需分支。
-							Vector2f fromPt(sx1, sy1), toPt(sx2, sy2);
-							Vector2f prevPt = (k > 0)
-								? Vector2f(pd.Data[i][k - 1].x * scale + camScaleX,
-								           pd.Data[i][k - 1].y * scale + camScaleY)
-								: fromPt;
-							Vector2f nextPt = (k + 1 < dataSize)
-								? Vector2f(pd.Data[i][k + 1].x2 * scale + camScaleX,
-								           pd.Data[i][k + 1].y2 * scale + camScaleY)
-								: toPt;
-
-							SDFBatchPushBezier(layer, fromPt, toPt, prevPt, nextPt);
+							// 本段曲线采样点已由 WriteSub 在落笔时算好并存入 WriteData（世界坐标），
+							// 绘制阶段只把它们换算到目标像素坐标后提交线段，不再做任何曲线求值，
+							// 保证「坐标变换只在 WriteSub、绘制不改坐标」这一约束。
+							SDFBatchPushCurve(layer, data.CurvePts,
+								Vector2f(sx1, sy1), Vector2f(sx2, sy2),
+								scale, pd.CameraPos);
 						}
 						else
 						{
@@ -2905,20 +2944,11 @@ void DrawNowLayer(RenderTarget& window)
 						SDFBatchBegin(data.color, halfW,
 							Tool::PenCap == 2 ? (150.f / 255.f) : 1.f);
 					}
-					// 用贝塞尔曲线平滑本段：取上一条笔迹起点作 prev、下一条笔迹终点作 next
-					// 构造切线，使相邻段在连接点处一阶连续，消除折线感。
-					// 边界（首/尾段）用自身端点填充相邻点，曲线自动退化为直线，无需分支。
-					Vector2f fromPt(sx1, sy1), toPt(sx2, sy2);
-					Vector2f prevPt = (i > 0)
-						? Vector2f((WriteDataTemp[i - 1].x + pd.CameraPos.x) * scale,
-						           (WriteDataTemp[i - 1].y + pd.CameraPos.y) * scale)
-						: fromPt;
-					Vector2f nextPt = (i + 1 < (int)WriteDataTemp.size())
-						? Vector2f((WriteDataTemp[i + 1].x2 + pd.CameraPos.x) * scale,
-						           (WriteDataTemp[i + 1].y2 + pd.CameraPos.y) * scale)
-						: toPt;
-
-					SDFBatchPushBezier(WriteTempLayer, fromPt, toPt, prevPt, nextPt);
+					// 本段曲线采样点已由 WriteSub 在落笔时算好并存入 WriteData（世界坐标），
+					// 绘制阶段只把它们换算到目标像素坐标后提交线段，不再做任何曲线求值。
+					SDFBatchPushCurve(WriteTempLayer, data.CurvePts,
+						Vector2f(sx1, sy1), Vector2f(sx2, sy2),
+						scale, pd.CameraPos);
 				}
 				else
 				{
@@ -2951,7 +2981,7 @@ void DrawNowLayer(RenderTarget& window)
 			}
 			else
 			{
-				if (data.w < Tool::PenSize / 3) data.w += 0.3;
+				if (data.w < Tool::PenSize / 3) data.w += 0.2;
 			}
 				
 		}
@@ -3081,7 +3111,7 @@ void DrawImageLayer(RenWin& window)
 bool StraightenWriteData(
 	vector<WriteData>& WriteDataTemp,
 	float tolerance = 10.0f * ScreenScale,
-	float minLength = 200.f * GetCurPage().Scale / 100.0)
+	float minLength = 200.f * 100.0 / GetCurPage().Scale)
 {
 	size_t N = WriteDataTemp.size();
 	if (N <= 1) return false;
@@ -3163,7 +3193,7 @@ LineEndpoints GetStraightenedEndpoints(
 bool StraightenWriteDataToCircle(
 	vector<WriteData>& WriteDataTemp,
 	float toleranceRatio = 0.38f,
-	float minRadius = 30.f * ScreenScale,
+	float minRadius = 30.f * ScreenScale * 100.0 / GetCurPage().Scale,
 	float closeRatio = 0.85f)
 {
 	size_t N = WriteDataTemp.size();
@@ -3522,8 +3552,8 @@ void WriteSub(RenWin& window)
 
 			if (PenW > Tool::PenSize / 2 && Tool::PenCap == 0)
 			{				
-				if (!WriteCamera::EnableWriteCamera) PenW -= 0.4;
-				else PenW -= 0.2;
+				if (!WriteCamera::EnableWriteCamera) PenW -= 0.3;
+				else PenW -= 0.1;
 			}
 
 			// 线宽按缩放比例存
