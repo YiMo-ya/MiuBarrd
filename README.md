@@ -5,7 +5,14 @@
 一款基于 SFML 构建的轻量级电子白板，专注于极速渲染与极简交互，
 通过灵活的插件系统赋予无限可能。
 
-> 🆓 完全免费，开箱即用，无激活码、无内购、无花里胡哨。
+> [FREE] 完全免费，开箱即用，无激活码、无内购、无花里胡哨。
+
+###软件截图
+<img width="1914" height="1073" alt="0" src="https://github.com/user-attachments/assets/0d79145a-f38a-4331-9f14-8439c9c62b45" />
+
+## 使用MiuBarrd
+在Release链接中下载最新的zip压缩包后解压并运行MiuBarrd.exe即可，或者点击<a href="https://github.com/YiMo-ya/MiuBarrd/releases/latest">这里</a>下载最新版本</br>
+<注意：需要C++Release包的环境>
 
 ---
 
@@ -24,8 +31,9 @@
 ### 渲染性能
 
 - **批处理渲染管线** — 基于 SFML 的绘制优化，减少状态切换
-- **自动批合并（Batch Merging）** — 合并相邻绘制调用，降低 draw call
+- **自动批合并** — 合并相邻绘制调用，降低 draw call
 - **硬件加速** — 支持 VBO / VAO，充分利用 GPU 能力
+- **4K支持** — 保证4K屏幕的高分辨率的流畅
 
 ### 交互体验
 
@@ -33,24 +41,20 @@
 - **极简设计** — 无干扰界面，打开即用，专注内容本身
 - **低延迟** — 笔迹渲染延迟控制在毫秒级
 
-### 插件生态
-
-- 标准插件 API，支持 C++ 动态库
-- 运行时热加载/卸载
-- 社区驱动的功能扩展
+<img width="1919" height="1079" alt="1" src="https://github.com/user-attachments/assets/c57dd571-3d43-4271-9c1c-dc4ac6e0ac20" />
+<img width="1919" height="1079" alt="2" src="https://github.com/user-attachments/assets/b32bd612-fd49-485a-91e1-b44ac0d0a7dc" />
+<img width="1919" height="1079" alt="3" src="https://github.com/user-attachments/assets/8a0cb640-7a64-4471-a996-21826ad3e9c9" />
 
 ---
 
 ## 开发路线图
 
-| 阶段 | 方向 | 状态 |
-|------|------|------|
-| v0.1 | 核心白板功能 + SFML 渲染 | ✅ 完成 |
-| v0.2 | 插件系统 MVP | 🔄 进行中 |
-| v0.3 | 优化体积，进一步轻量化 | 📋 计划中 |
-| v0.4 | 跨平台支持（Linux / macOS） | 📋 计划中（目前仅支持 Windows 10+） |
-| v0.5 | 接入 AI 高级功能 | 📋 计划中 |
-| v1.0 | 自动更新 & 网络功能 | 📋 计划中 |
+|方向 | 状态 |
+|------|------|
+| 优化体积，进一步轻量化 | 计划中 |
+| 跨平台支持（Linux / macOS） | 计划中（目前仅支持 Windows 10+） |
+| 接入 AI 高级功能 | 计划中 |
+
 
 ---
 
