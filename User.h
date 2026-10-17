@@ -17,6 +17,8 @@ public:
 
 	static bool EnableBack;
 
+	static bool UseB;
+
 	static void Read();
 
 	//保存配置到 User.ini

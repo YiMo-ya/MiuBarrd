@@ -11,6 +11,7 @@ bool User::EnableWriteAdjust = true;
 bool User::EnableAnimation = true;
 bool User::EnableExpTool = true;
 bool User::EnableBack = true;
+bool User::UseB = true;
 
 void User::Read()
 {
@@ -57,6 +58,10 @@ void User::Read()
 			{
 				UserLoad >> EnableBack;
 			}
+			if (temp == "[BEZIER]")
+			{
+				UserLoad >> UseB;
+			}
 		}
 	}
 	else
@@ -72,7 +77,8 @@ void User::Read()
 			<< "[ADJUST] " << to_string(EnableWriteAdjust ? 1 : 0) << endl
 			<< "[ANIMATION] " << to_string(EnableAnimation ? 1 : 0) << endl
 			<< "[EXP] " << to_string(EnableExpTool ? 1 : 0) << endl
-			<< "[BACK] " << to_string(EnableBack ? 1 : 0) << endl;
+			<< "[BACK] " << to_string(EnableBack ? 1 : 0) << endl
+			<< "[BEZIER] " << to_string(UseB ? 1 : 0) << endl;
 
 		UserSave.close();
 	}
@@ -84,10 +90,13 @@ void User::Save()
 	if (!UserSave.is_open()) return;
 
 	UserSave << "[MAINCOLOR] " << to_string(MainColor.r) << " " << to_string(MainColor.g) << " " << to_string(MainColor.b) << endl
+		<< "[BackColor] " << to_string(BackColor.r) << " " << to_string(BackColor.g) << " " << to_string(BackColor.b) << endl
 		<< "[FIXSHAPE] " << to_string(EnableFixShape ? 1 : 0) << endl
 		<< "[ADJUST] " << to_string(EnableWriteAdjust ? 1 : 0) << endl
 		<< "[ANIMATION] " << to_string(EnableAnimation ? 1 : 0) << endl
-		<< "[EXP] " << to_string(EnableExpTool ? 1 : 0) << endl;;
+		<< "[EXP] " << to_string(EnableExpTool ? 1 : 0) << endl
+		<< "[BACK] " << to_string(EnableBack ? 1 : 0) << endl
+		<< "[BEZIER] " << to_string(UseB ? 1 : 0) << endl;
 
 	UserSave.close();
 

@@ -3590,6 +3590,77 @@ void WriteSub(RenWin& window)
 			NewData.x2 = WritePos.x / scale - pd.CameraPos.x;
 			NewData.y2 = WritePos.y / scale - pd.CameraPos.y;
 
+			// 贝塞尔曲线展开（原地坐标改写）
+			// ---------------------------------------------------------------
+			// 设计约束：坐标变换只允许发生在 WriteSub，绘制阶段（DrawLayer /
+			// DrawNowLayer）只按已存好的坐标连线段，不能再做任何曲线求值或坐标改写。
+			// 因此这里在落笔时就一次性把本段笔迹展开成曲线采样点，并直接写回
+			// WriteData 的坐标字段，使「笔画端点」本身即是曲线上的点：
+			//   - 起点 (x, y) 取上一段笔迹的末点，保证与上一段严格首尾相接（C0）；
+			//   - 终点 (x2, y2) 取本段真实触控点，保证笔迹不会滞后于手指；
+			//   - 控制点按 Catmull-Rom 转三次贝塞尔生成（与 BezierSmoothSegment 同一套公式），
+			//     使相邻段在连接处切线一致（C1），消除快速书写时的折角。
+			// 控制点用世界坐标计算即可：缩放/相机平移是线性变换，
+			// 先变换后求值与先求值后变换结果等价，不影响曲线形状。
+			if (Tool::PenCap != 3) // 柳叶笔走三角填充，不参与曲线平滑
+			{
+				// 本段起点：优先接上一段已提交的末点；首段则用当前触控点（退化为直线）
+				Vector2f curveFrom = { NewData.x, NewData.y };
+				if (!WriteDataTemp.empty())
+				{
+					const WriteData& prevData = WriteDataTemp.back();
+					curveFrom.x = prevData.x2;
+					curveFrom.y = prevData.y2;
+				}
+				else
+				{
+					curveFrom.x = NewData.x2;
+					curveFrom.y = NewData.y2;
+				}
+
+				// 本段终点：本帧真实触控点（世界坐标）
+				Vector2f curveTo = { NewData.x2, NewData.y2 };
+
+				// 前驱邻点：上一段的「起点」；无上一段时与 curveFrom 重合（首段退化为直线）
+				Vector2f curvePrev = curveFrom;
+				if (WriteDataTemp.size() >= 2)
+				{
+					const WriteData& prevData = WriteDataTemp[WriteDataTemp.size() - 2];
+					curvePrev.x = prevData.x2;
+					curvePrev.y = prevData.y2;
+				}
+
+				// 后继邻点：本段尚无下一段，取与 curveTo 重合（尾段退化为直线）。
+				// 这样曲线末端切线方向为 to - from，指向手指运动方向，不会出现「回勾」。
+				Vector2f curveNext = curveTo;
+
+				// Catmull-Rom 转三次贝塞尔控制点（臂长 1/6，与 BezierSmoothSegment 一致）
+				Vector2f cp1(curveFrom.x + (curveTo.x - curvePrev.x) / 6.f,
+				             curveFrom.y + (curveTo.y - curvePrev.y) / 6.f);
+				Vector2f cp2(curveTo.x   - (curveNext.x - curveFrom.x) / 6.f,
+				             curveTo.y   - (curveNext.y - curveFrom.y) / 6.f);
+
+				// 自适应细分：曲线越弯曲/越长，采样点越多，保证肉眼看不到折线
+				int segN = BezierSubdivCount(curveFrom, cp1, cp2, curveTo);
+
+				// 采样点写入 CurvePts（世界坐标），供绘制阶段直接连线段使用。
+				// 绘制阶段不再做曲线求值，因此这里必须把点算全。
+				NewData.CurvePts.clear();
+				NewData.CurvePts.reserve(segN + 1);
+				for (int i = 0; i <= segN; ++i)
+				{
+					float t = (float)i / (float)segN;
+					NewData.CurvePts.push_back(BezierEval(curveFrom, cp1, cp2, curveTo, t));
+				}
+
+				// 原地改写端点坐标：起点吸附到上一段末点，终点保持真实触控点。
+				// 首段时 curveFrom 已等于当前触控点，此赋值等于不变，天然兼容起笔。
+				NewData.x = curveFrom.x;
+				NewData.y = curveFrom.y;
+				NewData.x2 = curveTo.x;
+				NewData.y2 = curveTo.y;
+			}
+
 			if (PenW > Tool::PenSize / 2 && Tool::PenCap == 0)
 			{				
 				if (!WriteCamera::EnableWriteCamera) PenW -= 0.6;
