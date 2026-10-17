@@ -654,7 +654,7 @@ public:
     /// @param cur       当前帧纹理
     /// @param threshold 差异阈值 [0,1]，如 0.005 = 0.5%
     /// @param stable    连续多少帧差异低于阈值才返回 true（防抖）
-    bool operator()(const sf::Texture& cur, float threshold = 0.3f, int stable = 1)
+    bool operator()(const sf::Texture& cur, float threshold = 0.15f * WindowSize.x / 1920.0, int stable = 1)
     {
         const sf::Vector2u size = cur.getSize();
         const uint64_t key = (uint64_t(size.x) << 32) | size.y;
@@ -757,9 +757,12 @@ private:
 };
 FrameDiffChecker FrameChecker;
 
+const float AUTOPHOTO_NEEDCLOCK = 80.0;
+
+static int PhotoClock = 0;
+
 bool CameraManager::NeedAutoPhoto()
 {
-    static int PhotoClock = 0;
 
     if (!WriteCamera::EnableAutoPhoto)
     {
@@ -776,14 +779,18 @@ bool CameraManager::NeedAutoPhoto()
 
     ++PhotoClock;
 
-    if (PhotoClock > 80)
+    if (PhotoClock > AUTOPHOTO_NEEDCLOCK)
     {
-        PhotoClock = 0;   // 先复位，再返回，否则成为死代码
-        return true;      // 稳定超过 120 帧 → 拍一张
+        PhotoClock = 0;
+        return true;
     }
 
     return false;
 }
 
+float CameraManager::GetAutoPhotoTime()
+{
+    return (float)PhotoClock / AUTOPHOTO_NEEDCLOCK;
+}
 
 #pragma endregion

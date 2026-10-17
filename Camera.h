@@ -79,4 +79,6 @@ public:
     static void Rote();
 
     static bool NeedAutoPhoto();
+
+    static float GetAutoPhotoTime();
 };

@@ -3993,7 +3993,6 @@ void Write::Show(RenWin& window)
 	MindMap::Update();
 
 	//处理思维导图的调色请求：点击颜色按钮后弹出色盘并写回节点颜色。
-	// 放在这里是因为 ChooseColorWindow 需要 RenderWindow&，而 Update 没有窗口参数。
 	{
 		int colorReq = MindMap::TakeColorRequest();
 		if (colorReq >= 0)
@@ -4029,7 +4028,7 @@ void Write::Show(RenWin& window)
 		XGraph::SetFillColor(Color(30, 30, 30, FrontAlpha));
 		XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
 
-		if (FrontAlpha - 15 > 0) FrontAlpha -= 15;
+		if (FrontAlpha - 9 > 0) FrontAlpha -= 9;
 		else FrontAlpha = 0;
 	}
 }
@@ -4373,12 +4372,12 @@ void Write::EnableTempLayer(bool enable)
 void Write::UpScrollPage()
 {
 	static int Speed = WindowSize.y / 4;
-	ResetPos.y.SetAnimation(ResetPos.y.value - Speed);
+	ResetPos.y.SetAnimation(ResetPos.y.value + Speed);
 }
 void Write::DownScrollPage()
 {
 	static int Speed = -WindowSize.y / 4;
-	ResetPos.y.SetAnimation(ResetPos.y.value - Speed);
+	ResetPos.y.SetAnimation(ResetPos.y.value + Speed);
 }
 
 void Write::ResetMove()
@@ -5768,6 +5767,8 @@ void WriteCamera::ManageShareCamera(RenWin& window)
 //展台
 #pragma region MyRegion
 
+EV StartScale;
+
 void WriteCamera::Start()
 {
 	static int InitW = WindowSize.y * 0.8,InitH = WindowSize.x * 0.8;
@@ -5802,6 +5803,7 @@ void WriteCamera::Start()
 	}
 }
 
+EV AutoPhotoTipY;
 void WriteCamera::Draw(RenWin& window)
 {
 	auto& pd = GetCurPage();
@@ -5811,6 +5813,9 @@ void WriteCamera::Draw(RenWin& window)
 		EnableAutoPhoto = false;
 		return;
 	}
+
+	//初始动画
+	StartScale.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
 
 	float Scale = pd.Scale / 100.0;
 
@@ -5822,7 +5827,7 @@ void WriteCamera::Draw(RenWin& window)
 	if(!EnableShareCamera)
 	{
 		CameraManager::DrawCameraImage(
-			dx, dy, Scale,
+			dx, dy, Scale * StartScale.value / 100.0,
 			window);
 	}
 	else
@@ -5839,15 +5844,53 @@ void WriteCamera::Draw(RenWin& window)
 
 	if (CameraManager::NeedAutoPhoto()) PhotoImage();
 
-	if (EnableAutoPhoto)
+	AutoPhotoTipY.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+
+	static int MaxAutoPhotoTipY = WindowSize.y * 0.9;
+	if (AutoPhotoTipY.value < MaxAutoPhotoTipY)
 	{
+		static int BorderAlpha = 0;
+		static bool NeedBorderAlphaUp = true;
+		static const int SPEED = 4;
+
+		if (NeedBorderAlphaUp)
+		{
+			if (BorderAlpha + SPEED < 255) BorderAlpha += SPEED;
+			else
+			{
+				BorderAlpha = 255;
+				NeedBorderAlphaUp = false;
+			}
+		}
+		else
+		{
+			if (BorderAlpha - SPEED > 0) BorderAlpha -= SPEED;
+			else
+			{
+				BorderAlpha = 0;
+				NeedBorderAlphaUp = true;
+			}
+		}
+
 		XGraph::SetFillColor(Color(30, 30, 30, 150));
 		static int w = WindowSize.x / 4, h = WindowSize.y / 15,r = WindowSize.x / 200;
-		static int x = WindowSize.x / 2 - w / 2, y = WindowSize.y / 2 - h / 2;
-		XGraph::RectangleShape::FillRoundRect_WithoutBorder(x, y, w, h, r, window);
+		static int x = WindowSize.x / 2 - w / 2;
+		XGraph::RectangleShape::FillRoundRect_WithoutBorder(x, AutoPhotoTipY.value, w, h, r, window);
+		Color color = User::MainColor;
+		color.a = BorderAlpha;
+		XGraph::SetColor(color);
+		static int lw = WindowSize.x / 600;
+		XGraph::LineShape::SetLineWidth(lw);
+		XGraph::RectangleShape::RoundRect(x, AutoPhotoTipY.value, w, h, r, window);
+
+		XGraph::SetColor(User::MainColor);
+		XGraph::LineShape::SetLineWidth(lw * 3);
+		float TimeA = CameraManager::GetAutoPhotoTime();
+		XGraph::LineShape::Line(x + w / 2 - w / 2 * TimeA, AutoPhotoTipY.value + h, x + w / 2 + w / 2 * TimeA, AutoPhotoTipY.value + h, window);
+
 		XText::SetFontConfig(Color::White, FONTSIZE * 1.5);
 		XText::SetFontAdjust(ADJUST_CENTER, ADJUST_CENTER);
-		XText::Xyprintf(WindowSize.x / 2, WindowSize.y / 2, L"自动拍照，请保持静止", window);
+		XText::Xyprintf(WindowSize.x / 2, AutoPhotoTipY.value + h / 2, L"自动拍照，请保持静止", window);
 	}
 }
 
@@ -5873,6 +5916,11 @@ bool WriteCamera::Manage()
 		LastTotalPage = Write::TotalPage;
 		Write::Page = 0;
 		Write::TotalPage = CameraPageData.size();
+
+		AutoPhotoTipY.SetAnimationStartValue(WindowSize.y);
+
+		StartScale.SetAnimationStartValue(70);
+		StartScale.SetAnimation(100, 120);
 	}
 	else
 	{
@@ -5969,10 +6017,13 @@ void WriteCamera::ManageAutoPhoto()
 	if (EnableAutoPhoto)
 	{
 		BottomMessage::AddMessage(401, L"开始自动拍照", BottomMessageType_INFO);
+
+		AutoPhotoTipY.SetAnimation(WindowSize.y * 0.65,30);
 	}
 	else
 	{
 		BottomMessage::AddMessage(401, L"停止自动拍照", BottomMessageType_INFO);
+		AutoPhotoTipY.SetAnimation(WindowSize.y, 30);
 	}
 }
 
