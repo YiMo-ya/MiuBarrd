@@ -179,6 +179,7 @@ static int PerSetPenSize[4];
 //预设颜色表
 const Color PersetPenColor[15] = {
 	Color(255,255,255),
+	Color(0,0,0),
 	Color(255,0,70),
 	Color(255,253,85),
 	Color(97, 255, 210),
@@ -191,8 +192,7 @@ const Color PersetPenColor[15] = {
 	Color(150,200,255),
 	Color(255,40,150),
 	Color(255,160,70),
-	Color(240,130,80),
-	Color(240,90,230)
+	Color(240,130,80)
 };
 
 //背景圆
@@ -3652,7 +3652,8 @@ public:
 					{
 						static wstring text[3] = { L"上一张",L"相册",L"下一张" };
 
-						if (page == 1)text[2] = L"进入相册";
+						if (page == 1) text[2] = L"进入相册";
+						else text[2] = L"下一张";
 
 						if (WriteCamera::EnableWriteCamera && page == 1 && i < 2) continue;
 					
@@ -3793,7 +3794,7 @@ public:
 
 	void Draw(RenWin& window)
 	{
-		static int BasicSizeTemp = BasicSize * 0.65;
+		static int BasicSizeTemp = BasicSize * 0.6;
 
 		//初始化
 		if (!init)
@@ -3873,7 +3874,7 @@ public:
 			DrawGlassBar(pos[1].x.value, pos[1].y.value, BasicSizeTemp, BasicSizeTemp, RoundSizeTemp, rt);
 
 			//箭头
-			static int lw = WindowSize.x / 300;
+			static int lw = WindowSize.x / 350;
 			XGraph::LineShape::SetLineWidth(lw);
 
 			if (ArrowAlpha[0].value > 0)
@@ -3942,8 +3943,20 @@ public:
 
 		if(left)
 		{
+			static float x = UISpace - 2;
+			static float y = WindowSize.y / 2 - BasicSizeTemp - UISpace;
 			if (XMsg::MouseMsg::IsMouseIn(
-				pos[0].x.value, pos[0].y.value, BasicSizeTemp + 4, BasicSizeTemp * 2 + UISpace + 4))
+				x + pos[0].x.value, y + pos[0].y.value, BasicSizeTemp + 4, BasicSizeTemp * 2 + UISpace + 4))
+			{
+				Tool::IsInBar = true;
+			}
+		}
+		else
+		{
+			static float x = WindowSize.x - UISpace - BasicSizeTemp - 2;
+			static float y = WindowSize.y / 2 - BasicSizeTemp - UISpace;
+			if (XMsg::MouseMsg::IsMouseIn(
+				x + pos[0].x.value, y + pos[0].y.value, BasicSizeTemp + 4, BasicSizeTemp * 2 + UISpace + 4))
 			{
 				Tool::IsInBar = true;
 			}
@@ -3962,7 +3975,7 @@ public:
 			static float y = WindowSize.y / 2 - BasicSizeTemp - UISpace;
 			s.setPosition({ x,y });
 		}
-		s.setColor(Color(255, 255, 255, UIAlpha));
+		s.setColor(Color(255, 255, 255, UIAlpha / 1.3));
 		window.draw(s);
 
 		//自动回放检测

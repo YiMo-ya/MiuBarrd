@@ -850,7 +850,6 @@ void Hello(RenWin& window)
 
 void ShowUpdate(RenWin& window)
 {
-	//Update(window);
 	Hello(window);
 }
 

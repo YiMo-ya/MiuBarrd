@@ -222,7 +222,7 @@ void EnterSetting(RenWin& window)
 	bool NeedExit = false;
 
 	//行高
-	int RowH = BarH * 0.13;
+	int RowH = BarH * 0.1;
 	int RowX = BarX + BarW * 0.08;
 	int RowW = BarW * 0.84;
 

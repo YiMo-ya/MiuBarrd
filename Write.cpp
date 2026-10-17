@@ -369,9 +369,6 @@ bool IsErasing = false;
 //页码
 int Write::TotalPage = 0, Write::Page = 0;
 
-//页面移动速度
-Vector2i MoveSpeed;
-
 //暂停书写时间
 static int WriteStopTime = 0;
 
@@ -470,33 +467,45 @@ PageDataS& GetCurPage()
 // 着色器内线段数上界（编译期常量）。必须是字面量，GLSL 需要编译期常量做数组与循环上界；
 #define SDF_MAX_SEGS 256
 
+// ============================================================================
+// 【笔迹连接处形态调参区】—— 只改这里就能调出最优观感，无需动下方实现
+// ============================================================================
+// 半圆帽外溢系数：线段端点处保留的圆帽半径 = 半线宽 × 本系数。
+//   1.0  = 完整圆帽，接缝处半圆叠加最明显（传统胶囊笔迹）；
+//   0.0  = 完全无圆帽，接缝处绝对平齐，但笔迹起末两端会变成方头；
+//   0.5~0.8 通常最自然：接缝凸起基本消失，笔尖仍是圆润的。
+// 调小一个数值不行就继续往下压，每次 0.05 试，找出「接缝不鼓 + 笔尖不方」的平衡点。
+#define SDF_CAP_SCALE 0.95f
+
+// 接缝处「主体权重」锐度：控制像素在接近线段端点时，何时从「圆角场」切换到「平行场」。
+//   值越大 → 越早认作端点区域，圆帽越容易被压小（接缝更平），但过大会让笔尖变方；
+//   值越小 → 越晚切换，圆帽保留越多（更圆润，但接缝可能重新鼓出）。
+// 与 SDF_CAP_SCALE 配合调：先定 CAP_SCALE，再用本值微调笔尖圆润度。
+#define SDF_JOINT_SHARPNESS 10.0f
+
 static const char* kSDFLineFragment = R"(
 uniform vec2  uSegs[512];     // 线段端点打包：偶数项=起点，奇数项=终点（画布像素）
 uniform float uHalfW;         // 半线宽（像素）
 uniform int   uCount;         // 有效线段数
 uniform float uAlpha;         // 整体不透明度（荧光笔用）
 uniform float uFeather;       // 额外羽化半径（像素），用于把硬边过渡加宽
+uniform float uCapScale;      // 端点圆帽半径占半线宽的比例（0=方头齐平，1=完整圆帽）
+uniform float uSharpness;     // 接缝圆角场→平行场的过渡锐度（越大越早压平端点）
 
 void main()
 {
     vec2 p = gl_TexCoord[0].xy;
 
     // 覆盖半径：半线宽 + AA/羽化带宽 + 1px 余量。
-    // 用于两块优化：
-    //  1) 逐线段包围盒剔除（落在半径外的线段不可能影响本像素）；
-    //  2) 循环结束后若最近距离仍超出该半径，可直接 discard，省去开方与混合。
     // 半径必须不小于真实绘制范围（uHalfW + AA 带宽），否则会把笔迹边缘/端点帽误剔除。
     float aa0 = max(uFeather, 0.75);
     float r   = uHalfW + aa0 + 1.0;
     float r2  = r * r;
 
+    // 最终使用的「有符号距离平方」由圆角场按端点衰减得到，初值 1e18 表示尚无覆盖。
     float d2 = 1e18;
 
     // 逐线段求"点到线段距离的平方"，只保留最小值。
-    // 优化要点：
-    //  1) 循环上界直接用 uCount，去掉每像素一次 if(i>=uCount) 判断；
-    //  2) 先用线段 AABB（按 r 外扩）做廉价剔除，把绝大多数线段挡在 dot/clamp 之前；
-    //  3) 循环内只算平方距离，仅在最后对最近的一条开方，省掉每线段一次 sqrt。
     for (int i = 0; i < uCount; i++)
     {
         vec2 a = uSegs[i * 2];
@@ -511,9 +520,21 @@ void main()
         vec2 pa = p - a;
         vec2 ba = b - a;
         float denom = dot(ba, ba);
-        float h = denom > 1e-6 ? clamp(dot(pa, ba) / denom, 0.0, 1.0) : 0.0;
+        // 未 clamp 的投影参数 t：t<0 或 t>1 表示像素落在端点圆帽区
+        float t = denom > 1e-6 ? dot(pa, ba) / denom : 0.0;
+        float h = clamp(t, 0.0, 1.0);
         vec2 diff = pa - ba * h;
-        d2 = min(d2, dot(diff, diff));
+        float segD2 = dot(diff, diff);
+
+        // 端点衰减 w ∈ [0,1]：像素正对线段主体时为 1（完整线宽），
+        // 越靠近端点越接近 uCapScale（端点帽被压小），从而接缝两侧不再各自溢出整圆。
+        // hp = min(h, 1-h) 与 min(t, 1-t) 等价（t 被 clamp 后两者对称），但不必额外求 abs。
+        float hp = min(h, 1.0 - h);
+        float w  = uCapScale + (1.0 - uCapScale) * clamp(hp * uSharpness, 0.0, 1.0);
+        // 保底倒数值：w 已被 clamp 到 [uCapScale, 1]，倒数上限为 1/uCapScale；
+        // 这里用 max(w, 1e-3) 只是防止用户在常量里写 0 时出现除零。
+        float inv2 = 1.0 / max(w * w, 1e-6);
+        d2 = min(d2, segD2 * inv2);
     }
 
     // 所有线段都被剔除（或本就离笔迹很远）时提前退出，省掉后续开方与着色混合。
@@ -576,12 +597,17 @@ public:
     /// <param name="halfW">半线宽（像素）。</param>
     /// <param name="color">颜色，alpha 参与混合。</param>
     /// <param name="alpha">额外整体不透明度，荧光笔传 150/255，其余传 1.0。</param>
+	/// <param name="roundCap">
+	/// 连接/端帽形态：true=传统完整圆帽胶囊笔迹（接缝处半圆叠加，圆形突出最明显）；
+	/// false=按文件开头的 SDF_CAP_SCALE 压小端点圆帽（接缝处平齐，笔尖仍保留圆润）。
+	/// </param>
 	void Draw(sf::RenderTarget& target,
 		const sf::Glsl::Vec2* segs,
 		int segCount,
 		float halfW,
 		const sf::Color& color,
-		float alpha)
+		float alpha,
+		bool roundCap = false)
 	{
 		if (!Ready() || segCount <= 0) return;
 		if (segCount > kMaxSegs) segCount = kMaxSegs;
@@ -594,7 +620,10 @@ public:
 		m_shader.setUniform("uHalfW", halfW);
 		m_shader.setUniform("uCount", segCount);
 		m_shader.setUniform("uAlpha", alpha);
-		float feather = halfW * 0.4f;
+		// 端点帽比例交给文件开头的可调常量，roundCap 只用于整批切换「完整圆帽 / 压平」
+		m_shader.setUniform("uCapScale", roundCap ? 1.f : SDF_CAP_SCALE);
+		m_shader.setUniform("uSharpness", SDF_JOINT_SHARPNESS);
+		float feather = halfW * 0.2f;
 		if (feather > 1.5f) feather = 1.5f;
 		if (feather < 0.6f) feather = 0.6f;
 		m_shader.setUniform("uFeather", feather);
@@ -653,6 +682,11 @@ vector<sf::Glsl::Vec2> g_SDFSegs;
 sf::Color g_SDFColor = sf::Color::White;
 float g_SDFHalfW = 1.f;
 
+// 当前批次使用的连接/端帽形态（false = 按 SDF_CAP_SCALE 压小端帽，true = 完整圆帽）。
+// 之所以用全局状态而不是每条线段各带参数：同一批次的线段被合并成一次 draw，
+// 形态只能按批次统一；并且整条笔迹必须保持同一种形态，否则接缝处会再次出现形变。
+bool g_SDFRoundCap = false;
+
 /// <summary>
 /// 清空当前 SDF 批次，准备收集一组同色同宽的线段。
 /// </summary>
@@ -676,8 +710,10 @@ static void SDFBatchPush(sf::RenderTarget& target, float x1, float y1, float x2,
 
     if ((int)g_SDFSegs.size() >= SDFLineRenderer::kMaxSegs * 2)
     {
+        // 满批自动冲刷必须沿用当前批次的连接形态，
+        // 否则长笔迹在第 256 段之后会突然切回圆帽，接缝处重新出现圆形突出
         SDFLineRenderer::Instance().Draw(
-            target, g_SDFSegs.data(), (int)g_SDFSegs.size() / 2, g_SDFHalfW, g_SDFColor, 1.f);
+            target, g_SDFSegs.data(), (int)g_SDFSegs.size() / 2, g_SDFHalfW, g_SDFColor, 1.f, g_SDFRoundCap);
         g_SDFSegs.clear();
     }
 }
@@ -685,12 +721,17 @@ static void SDFBatchPush(sf::RenderTarget& target, float x1, float y1, float x2,
 /// <summary>
 /// 冲刷当前 SDF 批次，把已收集的线段一次性提交绘制。
 /// </summary>
-static void SDFBatchFlush(sf::RenderTarget& target)
+/// <param name="target">绘制目标（书写层 / 荧光层 / 临时层）。</param>
+/// <param name="roundCap">
+/// 连接/端帽形态：默认 false 按文件开头的 SDF_CAP_SCALE 压小端点圆帽，
+/// 使相邻线段在连接点平齐、不产生圆形突出；传 true 则退回传统完整圆帽胶囊笔迹。
+/// </param>
+static void SDFBatchFlush(sf::RenderTarget& target, bool roundCap = false)
 {
     if (g_SDFSegs.empty()) return;
 
     SDFLineRenderer::Instance().Draw(
-        target, g_SDFSegs.data(), (int)g_SDFSegs.size() / 2, g_SDFHalfW, g_SDFColor, 1.f);
+        target, g_SDFSegs.data(), (int)g_SDFSegs.size() / 2, g_SDFHalfW, g_SDFColor, 1.f, roundCap);
     g_SDFSegs.clear();
 }
 
@@ -2647,7 +2688,6 @@ void DrawEraseRect(RenWin& window)
 //绘制
 #pragma region MyRegion
 
-
 //绘制书写层
 void DrawLayer(RenderTarget& window)
 {
@@ -2977,7 +3017,7 @@ void DrawNowLayer(RenderTarget& window)
 
 			if(!WriteCamera::EnableWriteCamera)
 			{
-				if (data.w < Tool::PenSize) data.w += 0.5;
+				if (data.w < Tool::PenSize) data.w += 0.4;
 			}
 			else
 			{
@@ -3502,7 +3542,7 @@ void WriteSub(RenWin& window)
 		return;
 	}
 
-	if (Tool::ToolCount != 0 || MoveSpeed.x != 0 || MoveSpeed.y != 0) return;
+	if (Tool::ToolCount != 0 || TouchNum > 1) return;
 
 	Vector2i WritePos = XMsg::TouchMsg::GetTouchPos();
 
@@ -3552,8 +3592,8 @@ void WriteSub(RenWin& window)
 
 			if (PenW > Tool::PenSize / 2 && Tool::PenCap == 0)
 			{				
-				if (!WriteCamera::EnableWriteCamera) PenW -= 0.3;
-				else PenW -= 0.1;
+				if (!WriteCamera::EnableWriteCamera) PenW -= 0.6;
+				else PenW -= 0.2;
 			}
 
 			// 线宽按缩放比例存
@@ -3697,10 +3737,18 @@ void MoveCamera()
 	static int MaxMoveSpeed = 30;
 
 	//归位
-	ResetPos.x.UpdateAnimation(XEase::EaseBasic::easeInOut, 4);
-	ResetPos.y.UpdateAnimation(XEase::EaseBasic::easeInOut, 4);
-	if (ResetPos.x.IsAnimation()) GetCurPage().CameraPos.x = ResetPos.x.value;
-	if (ResetPos.y.IsAnimation()) GetCurPage().CameraPos.y = ResetPos.y.value;
+	ResetPos.x.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+	ResetPos.y.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+	if (ResetPos.x.IsAnimation())
+	{
+		GetCurPage().CameraPos.x = ResetPos.x.value;
+		FlushWriteLayer = true;
+	}
+	if (ResetPos.y.IsAnimation())
+	{
+		GetCurPage().CameraPos.y = ResetPos.y.value;
+		FlushWriteLayer = true;
+	}
 
 	static const int CameraTo = 1;
 
@@ -3712,21 +3760,15 @@ void MoveCamera()
 	static int TouchTime = 0;
 
 	static int MoveSleepTime = 0;
-	static int onef = 0;
-
-	//单指冷却
-	if (onef > 0) onef -= 1;
 
 	static Vector2i temp_mousep;
 
-	//触点数量变化（双指先后按下/松开存在时间差）时，参考点必须复位：
-	//否则会把"触点数的跳变"误当成一次真实拖动，导致画面瞬移（跑）。
+	//触点数量变化（双指先后按下/松开存在时间差）时，参考点必须复位
 	static int LastTouchNum = 0;
 	if (TouchNum != LastTouchNum)
 	{
 		LastTouchNum = TouchNum;
 		temp_mousep.x = temp_mousep.y = 0;
-		MoveSpeed = { 0, 0 };
 	}
 
 	//移动
@@ -3744,16 +3786,21 @@ void MoveCamera()
 			{
 				TouchTime = 60;
 			}
-			if ((TouchNum >= 2 && TouchTime > 10) || (onef == 0 && TouchTime > 10 && TouchNum == 1) || (XMsg::KeyMsg::Keystate(VK::MouseLeft) && TouchNum == 0))
+			if ((TouchNum >= 2 && TouchTime > 10) || (TouchTime > 10 && TouchNum == 1) || (XMsg::KeyMsg::Keystate(VK::MouseLeft) && TouchNum == 0))
 			{
 				if (temp_mousep.x > 0 && temp_mousep.y > 0)
 				{
 					if (x - temp_mousep.x != 0 && y - temp_mousep.y != 0)
 					{
 						int movex = 0, movey = 0;
-						if (movex < MaxMoveSpeed * ScreenScale) movex = x - temp_mousep.x;
-						if (movey < MaxMoveSpeed * ScreenScale) movey = y - temp_mousep.y;
-						MoveSpeed = { movex,movey };
+						movex = x - temp_mousep.x;
+						movey = y - temp_mousep.y;
+
+						auto& pd = GetCurPage();
+						pd.CameraPos.x += movex;
+						pd.CameraPos.y += movey;
+
+						FlushWriteLayer = true;
 					}
 					temp_mousep.x = x;
 					temp_mousep.y = y;
@@ -3764,8 +3811,6 @@ void MoveCamera()
 					temp_mousep.y = y;
 				}
 			}
-
-			if (TouchNum >= 2 && onef < 15) onef = 15;
 		}
 	}
 	else
@@ -3789,7 +3834,6 @@ void MoveCamera()
 			int delta = wheel / 100 / ScreenScale;
 
 			MoveSleepTime = 10;
-			onef = 10;
 
 			int AfterScale = prevScale + delta;
 			if (AfterScale < 5) AfterScale = 5;
@@ -3826,28 +3870,6 @@ void MoveCamera()
 				FlushWriteLayer = true;
 			}
 		}
-	}
-	//
-	//if (MoveSpeed.x > MaxMoveSpeed * ScreenScale)MoveSpeed.x = MaxMoveSpeed * ScreenScale;
-	//if (MoveSpeed.y > MaxMoveSpeed * ScreenScale)MoveSpeed.y = MaxMoveSpeed * ScreenScale;
-
-	if (MoveSpeed.x != 0 || MoveSpeed.y != 0)
-	{
-		if (MoveSpeed.x - CameraTo > 0) MoveSpeed.x -= CameraTo;
-		else if (MoveSpeed.x + CameraTo < 0) MoveSpeed.x += CameraTo;
-		else MoveSpeed.x = 0;
-		if (MoveSpeed.y - CameraTo > 0) MoveSpeed.y -= CameraTo;
-		else if (MoveSpeed.y + CameraTo < 0) MoveSpeed.y += CameraTo;
-		else MoveSpeed.y = 0;
-
-		auto& pd = GetCurPage();
-		float scale = pd.Scale / 100.0f;
-
-		// 关键：屏幕像素速度 -> 世界坐标位移
-		pd.CameraPos.x += (int)(MoveSpeed.x / scale);
-		pd.CameraPos.y += (int)(MoveSpeed.y / scale);
-
-		FlushWriteLayer = true;
 	}
 
 	if (WriteCamera::EnableWriteCamera)
@@ -4350,13 +4372,13 @@ void Write::EnableTempLayer(bool enable)
 //上/下 滑行
 void Write::UpScrollPage()
 {
-	static int Speed = WindowSize.y / 35;
-	MoveSpeed.y = Speed;
+	static int Speed = WindowSize.y / 4;
+	ResetPos.y.SetAnimation(ResetPos.y.value - Speed);
 }
 void Write::DownScrollPage()
 {
-	static int Speed = -WindowSize.y / 35;
-	MoveSpeed.y = Speed;
+	static int Speed = -WindowSize.y / 4;
+	ResetPos.y.SetAnimation(ResetPos.y.value - Speed);
 }
 
 void Write::ResetMove()
