@@ -551,11 +551,17 @@ void main()
     float a = clamp(0.5 - d / (2.0 * aa), 0.0, 1.0);
 
     // Hermite 平滑
-    float alpha = a * a * (3.0 - 2.0 * a);
+    // a 虽然已被 clamp 到 [0,1]，但 aa 在极细笔迹或剧烈缩放时可能趋近 0，
+    // 使 d / (2*aa) 溢出、a 的浮点值不可靠，Hermite 结果 alpha 会越界。
+    // 这里把 alpha 显式限定在 [0,1]：越界会让混合被硬性截断，边缘出现亮斑或黑边，羽化失效。
+    float alpha = clamp(a * a * (3.0 - 2.0 * a), 0.0, 1.0);
 
     if (alpha <= 0.0) discard;
 
-    gl_FragColor = vec4(gl_Color.rgb, gl_Color.a * uAlpha * alpha);
+    // 乘上 gl_Color.a 与 uAlpha（荧光笔半透明）后再限定一次，
+    // 保证最终写入的片元 alpha 不超过 1，避免叠加溢出导致颜色被提亮。
+    float outAlpha = clamp(gl_Color.a * uAlpha * alpha, 0.0, 1.0);
+    gl_FragColor = vec4(gl_Color.rgb, outAlpha);
 }
 )";
 
@@ -2732,7 +2738,7 @@ void DrawLayer(RenderTarget& window)
 		for (int i = 0; i < Size; ++i)
 		{
 			//抽样
-			static const int CHECKRECTBLOCK = 25;
+			static const int CHECKRECTBLOCK = 150;
 			bool NeedDraw = false;
 
 			//缓存 size()，避免循环中反复调用
@@ -3150,11 +3156,12 @@ void DrawImageLayer(RenWin& window)
 
 bool StraightenWriteData(
 	vector<WriteData>& WriteDataTemp,
-	float tolerance = 10.0f * ScreenScale,
+	float tolerance = 18.0f * ScreenScale,
 	float minLength = 200.f * 100.0 / GetCurPage().Scale)
 {
 	size_t N = WriteDataTemp.size();
-	if (N <= 1) return false;
+	// 两个采样点即可确定一条直线，因此下限放宽到 2
+	if (N < 2) return false;
 
 	float x1 = WriteDataTemp.front().x;
 	float y1 = WriteDataTemp.front().y;
@@ -3166,7 +3173,9 @@ bool StraightenWriteData(
 	float segLen = hypot(dx, dy);
 
 	if (segLen < minLength) return false;
-	if (N <= 4) return false;
+
+	// 首尾几乎重合时方向向量不可用，直接放弃（避免下面投影除法的数值退化）
+	if (dx * dx + dy * dy < 1e-6f) return false;
 
 	// 检查偏离
 	int outOfRangeCount = 0;
@@ -3181,21 +3190,31 @@ bool StraightenWriteData(
 		}
 	}
 
-	if (outOfRangeCount > (int)(N - 2) / 4) return false;
+	if (outOfRangeCount > (int)(N - 2) / 5) return false;
 
 	// 两端都投影到首尾直线
+	const float denom = dx * dx + dy * dy + 1e-6f;
 	for (size_t k = 0; k < N; ++k) {
+		WriteData& d = WriteDataTemp[k];
+
 		// 投影 (x, y)
-		float proj = ((WriteDataTemp[k].x - x1) * dx + (WriteDataTemp[k].y - y1) * dy)
-			/ (dx * dx + dy * dy + 1e-6f);
-		WriteDataTemp[k].x = x1 + proj * dx;
-		WriteDataTemp[k].y = y1 + proj * dy;
+		float proj = ((d.x - x1) * dx + (d.y - y1) * dy) / denom;
+		d.x = x1 + proj * dx;
+		d.y = y1 + proj * dy;
 
 		// 投影 (x2, y2)
-		float proj2 = ((WriteDataTemp[k].x2 - x1) * dx + (WriteDataTemp[k].y2 - y1) * dy)
-			/ (dx * dx + dy * dy + 1e-6f);
-		WriteDataTemp[k].x2 = x1 + proj2 * dx;
-		WriteDataTemp[k].y2 = y1 + proj2 * dy;
+		float proj2 = ((d.x2 - x1) * dx + (d.y2 - y1) * dy) / denom;
+		d.x2 = x1 + proj2 * dx;
+		d.y2 = y1 + proj2 * dy;
+
+		// 关键：绘制阶段只要 CurvePts 非空就会走 SDFBatchPushCurve，
+		// 完全忽略 x/y 与 x2/y2。若不同步折算曲线采样点，上面的投影结果
+		// 只落在数据里、不会体现在画面上，表现为「触发了矫正但笔迹没变」。
+		for (auto& p : d.CurvePts) {
+			float pp = ((p.x - x1) * dx + (p.y - y1) * dy) / denom;
+			p.x = x1 + pp * dx;
+			p.y = y1 + pp * dy;
+		}
 	}
 
 	return true;
@@ -3232,12 +3251,13 @@ LineEndpoints GetStraightenedEndpoints(
 
 bool StraightenWriteDataToCircle(
 	vector<WriteData>& WriteDataTemp,
-	float toleranceRatio = 0.38f,
+	float toleranceRatio = 0.28f,
 	float minRadius = 30.f * ScreenScale * 100.0 / GetCurPage().Scale,
 	float closeRatio = 0.85f)
 {
 	size_t N = WriteDataTemp.size();
-	if (N <= 4) return false;
+	// 圆拟合至少需要 3 个不共线点；
+	if (N < 3) return false;
 
 	// 取中点进行圆拟合 (抗噪)
 	vector<float> px(N), py(N);
@@ -3280,7 +3300,7 @@ bool StraightenWriteDataToCircle(
 	}
 	// 离群点比例上限从 25% 收紧到 12%：椭圆各点半径差异大，会频繁超出收紧后的容差，
 	// 从而被判为离群，避免椭圆被强行拉成圆。
-	if (outliers > (int)(N * 0.12f)) return false;
+	if (outliers > (int)(N * 0.15f)) return false;
 
 	// 角度覆盖检查：逐段累加相邻点的角度增量，得到真实扫过的总弧度。
 	// 不能用 atan2(尾) - atan2(首) 直接相减——那样会把"绕了多圈"的信息丢掉，
@@ -3308,21 +3328,33 @@ bool StraightenWriteDataToCircle(
 
 	// 【核心】独立投影 + 首尾微调
 	for (size_t i = 0; i < N; ++i) {
+		WriteData& d = WriteDataTemp[i];
+
 		// 1. 内点 (x,y) 投影到平均半径
-		float ang1 = atan2(WriteDataTemp[i].y - cy, WriteDataTemp[i].x - cx);
-		WriteDataTemp[i].x = cx + meanR * cos(ang1);
-		WriteDataTemp[i].y = cy + meanR * sin(ang1);
+		float ang1 = atan2(d.y - cy, d.x - cx);
+		d.x = cx + meanR * cos(ang1);
+		d.y = cy + meanR * sin(ang1);
 
 		// 2. 外点 (x2,y2) 独立投影到平均半径 (不再人为加宽，消除交错)
-		float ang2 = atan2(WriteDataTemp[i].y2 - cy, WriteDataTemp[i].x2 - cx);
-		WriteDataTemp[i].x2 = cx + meanR * cos(ang2);
-		WriteDataTemp[i].y2 = cy + meanR * sin(ang2);
+		float ang2 = atan2(d.y2 - cy, d.x2 - cx);
+		d.x2 = cx + meanR * cos(ang2);
+		d.y2 = cy + meanR * sin(ang2);
 
 		// 3. 处理极短线段（若原x2y2与xy几乎重合，保持重合避免单点断裂）
-		float origLen = hypot(WriteDataTemp[i].x2 - WriteDataTemp[i].x, WriteDataTemp[i].y2 - WriteDataTemp[i].y);
+		float origLen = hypot(d.x2 - d.x, d.y2 - d.y);
 		if (origLen < 1e-4f) {
-			WriteDataTemp[i].x2 = WriteDataTemp[i].x;
-			WriteDataTemp[i].y2 = WriteDataTemp[i].y;
+			d.x2 = d.x;
+			d.y2 = d.y;
+		}
+
+		// 4. 关键：绘制阶段只要 CurvePts 非空就会走 SDFBatchPushCurve，
+		// 完全忽略 x/y 与 x2/y2。若不同步折算曲线采样点，上面的投影结果
+		// 只落在数据里、不会体现在画面上，表现为「触发了圆矫正但笔迹没变」。
+		// 采样点不在精确圆上，因此按"到圆心的角度"重新落到平均半径 meanR 上。
+		for (auto& p : d.CurvePts) {
+			float pang = atan2(p.y - cy, p.x - cx);
+			p.x = cx + meanR * cos(pang);
+			p.y = cy + meanR * sin(pang);
 		}
 	}
 
@@ -3868,8 +3900,8 @@ void MoveCamera()
 						movey = y - temp_mousep.y;
 
 						auto& pd = GetCurPage();
-						pd.CameraPos.x += movex;
-						pd.CameraPos.y += movey;
+						pd.CameraPos.x += movex * 100 / pd.Scale;
+						pd.CameraPos.y += movey * 100 / pd.Scale;
 
 						FlushWriteLayer = true;
 					}
@@ -3892,11 +3924,11 @@ void MoveCamera()
 		TouchTime = 0;
 	}
 
-	//缩放
-	if (Tool::ToolCount == 2 || (TouchNum >= 2 && TouchNum <= 5))
-	{
-		int wheel = XMsg::MouseMsg::GetMouseWheel();
+	int wheel = XMsg::MouseMsg::GetMouseWheel();
 
+	//缩放
+	if (Tool::ToolCount == 2 || wheel != 0)
+	{
 		if (wheel != 0)
 		{
 			POINT mp = { x,y };

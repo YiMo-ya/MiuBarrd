@@ -16,6 +16,8 @@
 
 NOSTD; NOXS;
 
+bool Tool::CanDeath = false;
+
 //辅助函数
 #pragma region MyRegion
 
@@ -178,21 +180,26 @@ static int PerSetPenSize[4];
 
 //预设颜色表
 const Color PersetPenColor[15] = {
-	Color(255,255,255),
-	Color(0,0,0),
-	Color(255,0,70),
-	Color(255,253,85),
-	Color(97, 255, 210),
-	Color(150,160,250),
-	Color(150,255,150),
-	Color(190,130,255),
-	Color(255,200,150),
-	Color(255,153,204),
-	Color(160,80,255),
-	Color(150,200,255),
-	Color(255,40,150),
-	Color(255,160,70),
-	Color(240,130,80)
+	Color(255,255,255), // 纯白
+
+	// 浅色系
+	Color(255,0,50), // 红
+	Color(255,255,100), // 黄
+	Color(150,255,170), // 绿
+	Color(180,235,255), // 蓝
+	Color(200,170,255), // 紫
+	Color(255,170,210), // 粉
+	Color(255,200,150), // 橙
+
+	Color(0,0,0),       // 纯黑
+
+	// 深色系
+	Color(255,30,170), // 玫红
+	Color(90,200,60), // 绿
+	Color(80,120,255), // 蓝
+	Color(230,140,70),  // 橙
+	Color(140,70,255),  // 紫
+	Color(140,220,220)   // 薄荷绿
 };
 
 //背景圆
@@ -4999,10 +5006,14 @@ void Tool::Draw(RenWin& window)
 
 	//启动时间
 	static int StartClock = 120;
-	if (StartClock > 0) StartClock -= 1;
+	if (StartClock > -100) StartClock -= 1;
+	else CanDeath = true;
 
 	//启用右侧消息
-	if(StartClock == 1) RightMessage::SetVisible(true);
+	if(StartClock == 1)
+	{
+		RightMessage::SetVisible(true);
+	}
 
 	//插件
 	ExtToolBar.Draw(window);

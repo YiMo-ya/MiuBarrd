@@ -5,9 +5,10 @@
 Color ChooseColorWindow(const Color& cancelColor, RenderWindow& window);
 
 class Tool
-
 {
 public:
+	//是否可以墓碑
+	static bool CanDeath;
 
 	//工具序号
 	static int ToolCount;

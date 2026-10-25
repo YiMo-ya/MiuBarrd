@@ -230,6 +230,8 @@ void StartAnimation(int PosStartX,int PosStartY,int SizeStartX,int SizeStartY, R
 	XText::SetFontColor(User::MainColor);
 	XText::SetFontAdjust(ADJUST_CENTER, ADJUST_CENTER);
 
+	int SleepTime = Random(15, 100);
+
 	while (XMsg::IsOpen(window))
 	{
 		clock_start += 1;
@@ -238,7 +240,7 @@ void StartAnimation(int PosStartX,int PosStartY,int SizeStartX,int SizeStartY, R
 		XGraph::SetFillColor(Color(30,30,30,150));
 		XGraph::RectangleShape::FillRect_WithoutBorder(0, 0, WindowSize.x, WindowSize.y, window);
 
-		if (clock_start > 30)
+		if (clock_start > SleepTime)
 		{
 			if (start_frame <= 20)
 			{
@@ -342,11 +344,14 @@ void App(RenWin& window)
 		//书写逻辑
 		Write::WriteT(window);
 		
-		while (!XWindow::IsFocus(window))
+		if(Tool::CanDeath)
 		{
-			XMsg::UpdateMsg(window);
-			::Sleep(10);
-			XSystem::Taskbar::SetTaskBarVisible(true);
+			while (!XWindow::IsFocus(window))
+			{
+				XMsg::UpdateMsg(window);
+				::Sleep(10);
+				XSystem::Taskbar::SetTaskBarVisible(true);
+			}
 		}
 
 		if (UpdateUser > 0) UpdateUser -= 1;
@@ -425,7 +430,11 @@ static bool SetForeWindow(HWND hWnd)
 
 int main()
 {
-	
+	XWindow::SetDPIAware();
+
+	ScreenSize = XSystem::Info::GetScreenSize();
+	ScreenScale = ScreenSize.y / 1080.0;
+
 	//打开检测
 	HWND hwnd = FindWindowW(NULL, L"MiuBarrd");
 	if (IsWindow(hwnd))
@@ -434,23 +443,19 @@ int main()
 		exit(0);
 	}
 
-	//使用手动批处理避免意外
-	XBatch::SetBatchType(BATCH_HANDLED);
-
-	User::Read();
-
-	XWindow::SetDPIAware();
-
-	ScreenSize = XSystem::Info::GetScreenSize();
-	ScreenScale = ScreenSize.y / 1080.0;
-
 	//创建窗口
 	int wx = ScreenSize.x / 2.5, wy = ScreenSize.y / 2.5;
 	Vector2i WindowCreateSize = { wx,wy };
 	Vector2i WindowCreatePos = { ScreenSize.x / 2 - WindowCreateSize.x / 2,ScreenSize.y / 2 - WindowCreateSize.y / 2 };
 	XWindow::CreateGraphWindow(
-		MainWindow,"MiuBarrd",
+		MainWindow, "MiuBarrd",
 		WindowCreatePos.x, WindowCreatePos.y, WindowCreateSize.x, WindowCreateSize.y, Style::None);
+
+	//使用手动批处理避免意外
+	XBatch::SetBatchType(BATCH_HANDLED);
+
+	User::Read();
+	
 
 	//设置图标
 	XWindow::SetIcon(MainWindow, ImgPath + L"Icon.dll");
@@ -480,8 +485,6 @@ int main()
 		Error::ShowError(
 			MainWindow, { L"MiuBarrd发生严重错误并崩溃了",L"错误原因：缺失关键文件",L"重新安装可以解决此问题",L"错误代码：FONTDLL_LOST"}, L"FONTDLL_LOST");
 	}
-
-	SetForeWindow(MainWindow.getNativeHandle());
 
 	//先禁用右侧消息，启用在Tool::Show
 	RightMessage::SetVisible(false);
