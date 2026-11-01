@@ -1,7 +1,7 @@
 ﻿#pragma once
-
 #include "Xs/Xs.h"
 #include "User.h"
+
 
 // 统一命名空间，供本头文件内的 MindMap::Node 使用 EV / vector / Color
 NOXS; NOSTD;
@@ -45,6 +45,15 @@ public:
 
 	//渲染指定页缩略图到纹理（不改变当前页）
 	static void GetPageThumbnail(int pageIndex, RenderTexture& rt);
+
+	/// <summary>
+	/// 把内存中的图片字节解码后插入当前页（用于手机上传的内存数据，不落盘）。
+	/// 图片过大时会按窗口比例等比缩放以保证初始可见，位置居中于当前视口。
+	/// </summary>
+	/// <param name="data">图片原始字节（PNG / JPEG 等可直接解码的格式）。</param>
+	/// <param name="size">字节数。</param>
+	/// <returns>解码并插入成功返回 true；字节为空或解码失败返回 false。</returns>
+	static bool AddImageFromMemory(const void* data, size_t size);
 };
 
 
@@ -92,6 +101,17 @@ public:
 	/// <param name="page">页数</param>
 	/// <returns></returns>
 	static int GetRote(int page);
+};
+
+class ShareWriteImage
+{
+public:
+
+	static int ShareImageRecvTotal, ShareImageRecvIndex;
+
+	static void ManageShareImage(RenWin& window);
+
+	static void PollShareImage();
 };
 
 class MindMap
@@ -180,4 +200,62 @@ public:
 	/// 用于与画布"擦除全部"保持一致的清屏语义。
 	/// </summary>
 	static void Clear();
+};
+
+/// <summary>
+/// 表格（思维导图式表格）：
+/// 以「第一行 + 第一列」为表头骨架，单元格按行列二维展开，
+/// 结构上更接近「以表格形式呈现的思维导图」——行列都可以动态增长，
+/// 删除某行/某列时，其覆盖区域内的手写笔迹会连带删除。
+///
+/// 交互约定（与需求一致）：
+///   - 只在「第一行末尾」与「第一列末尾」各有一个 + 按钮，用于新增一列/一行；
+///   - 每个表头单元格（第一列 / 第一行）的右上角内部有一个 - 按钮，
+///     用于删除该行（第一列）或该列（第一行）；
+///   - 不支持调色，单元格底色固定为白色。
+/// </summary>
+class WriteTable
+{
+public:
+	/// <summary>
+	/// 添加表格：未激活时按当前视口中心创建一张默认尺寸的表格并激活；
+	/// 已存在时不再重复创建，仅给出提示（每页只允许一张表格，避免互相覆盖）。
+	/// </summary>
+	static void Add();
+
+	/// <summary>
+	/// 绘制整张表格（底色、网格线、+ / - 按钮）到目标渲染目标。
+	/// </summary>
+	/// <param name="dest">目标渲染目标（窗口）。</param>
+	static void Draw(RenderTarget& dest);
+
+	/// <summary>
+	/// 每帧更新：按钮命中检测、点击响应（增删行列）、按最新行列重算网格。
+	/// </summary>
+	static void Update();
+
+	/// <summary>
+	/// 查询本帧触控是否落在表格的 + / - 按钮上。
+	/// 书写系统据此跳过落笔，避免点击按钮时穿透到底层画布留下笔迹。
+	/// </summary>
+	/// <returns>落在按钮上返回 true，否则返回 false。</returns>
+	static bool IsBtnHit();
+
+	/// <summary>
+	/// 清屏表格：移除表格并回到未激活状态，
+	/// 与画布"擦除全部"的清屏语义保持一致。
+	/// </summary>
+	static void Clear();
+
+	/// <summary>
+	/// 查询表格当前是否处于激活（已显示）状态。
+	/// </summary>
+	/// <returns>已激活返回 true。</returns>
+	static bool IsActive();
+
+	/// <summary>
+	/// 获取表格左上角坐标（世界坐标），供外部做定位或导出时参考。
+	/// </summary>
+	/// <returns>表格左上角世界坐标。</returns>
+	static Vector2i GetOrigin();
 };

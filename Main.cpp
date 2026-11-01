@@ -428,8 +428,25 @@ static bool SetForeWindow(HWND hWnd)
 	return true;
 }
 
+//只允许一个实例
+bool single_instance() {
+	static HANDLE h = CreateMutexA(nullptr, FALSE, "Global\\MiuBarrd_SingleInstance");
+	return h != nullptr && GetLastError() != ERROR_ALREADY_EXISTS;
+}
+
 int main()
 {
+	if (!single_instance())
+	{
+		//打开检测
+		HWND hwnd = FindWindowW(NULL, L"MiuBarrd");
+		if (IsWindow(hwnd))
+		{
+			SetForeWindow(hwnd);
+			exit(0);
+		}
+	}
+
 	XWindow::SetDPIAware();
 
 	ScreenSize = XSystem::Info::GetScreenSize();

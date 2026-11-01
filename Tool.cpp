@@ -1,4 +1,7 @@
-﻿#include "Tool.h"
+﻿// ShareImage.h 会引入 winsock2.h，必须先于任何包含 windows.h 的头文件，
+// 否则会触发 sockaddr / fd_set / timeval 等结构体重定义错误
+#include "ShareImage.h"
+#include "Tool.h"
 #include "Shared.h"
 #include "Debug.h"
 #include "Message.h"
@@ -243,7 +246,7 @@ static void UpdatePageBar();
 //是否应该进入导入界面
 static bool NeedEnterGet = false;
 
-void Get(RenWin& window)
+void GetLocal(RenWin& window)
 {
 	NeedEnterGet = false;
 
@@ -277,6 +280,181 @@ void Get(RenWin& window)
 
 	XMsg::ClearMsg();
 	XMsg::SetSleepTime(30);
+}
+
+//从手机相册上传图片（手机 -> PC）
+void GetMobile(RenWin& window)
+{
+	ShareWriteImage::ManageShareImage(window);
+
+	XMsg::ClearMsg();
+	XMsg::SetSleepTime(30);
+}
+
+//选择导入的方式
+
+int ChooseGetType(RenWin& window)
+{
+	int choose = 0;
+
+	RenWin temp;
+	XWindow::CreateGraphWindow(temp, L"选择导入方式", -1, -1, WindowSize.x / 2, WindowSize.y / 2, Style::Titlebar | Style::Close);
+	XWindow::DWM::SetWindowTitleBarColor(temp, XWindow::GetBackGroundColor());
+	XWindow::SetOwnerWindow(window);
+	XWindow::DWM::SetWindowBorderColor(temp, User::MainColor);
+
+	const int ChooseAll = 2;
+	int BarW = WindowSize.x / 5, BarH = (WindowSize.y / 2 - (ChooseAll + 1) * UISpace) / ChooseAll;
+
+	static IMAGE Icon[ChooseAll];
+	static wstring Name[ChooseAll] = { L"本地文件",L"手机照片"};
+
+	static bool init = false;
+	if (!init)
+	{
+		static wstring ImgName[ChooseAll] = { L"Local.dll",L"Phone.dll"};
+
+		for (int i = 0; i < ChooseAll; i++)
+		{
+			LoadIcon(Icon[i], ImgPath + L"GetType\\" + ImgName[i]);
+		}
+
+		init = true;
+	}
+
+	static int ButtomW = WindowSize.x / 20, ButtomH = WindowSize.y / 30;
+
+	while (1)
+	{
+		XWindow::DelayFps(temp);
+
+		for (int i = 0; i < ChooseAll; i++)
+		{
+			static int x = WindowSize.x / 100;
+			int y = UISpace + (BarH + UISpace) * i;
+
+			XGraph::SetFillColor(Color(20, 20, 20));
+			XGraph::RectangleShape::FillRoundRect_WithoutBorder(x, y, BarW, BarH, RoundSize, temp);
+			if (choose == i)
+			{
+				XGraph::LineShape::SetLineWidth(WindowSize.x / 1000);
+				XGraph::SetColor(User::MainColor);
+				XGraph::RectangleShape::RoundRect(x, y, BarW, BarH, RoundSize, temp);
+			}
+
+			static float Scale = IconSize * 2 / 512.0;
+
+			XImage::PutScaleImage(Icon[i], x + BarW * 0.1, y + BarH / 2, Scale, Scale, temp, 0, 0.5);
+
+			XText::SetFontConfig(Color::White, FONTSIZE);
+			XText::SetFontAdjust(ADJUST_RIGHT, ADJUST_BOTTOM);
+			XText::Xyprintf(x + BarW * 0.9, y + BarH * 0.9, Name[i], temp);
+
+			if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft))
+			{
+				if (XMsg::MouseMsg::IsMouseIn(x, y, BarW, BarH))
+				{
+					choose = i;
+				}
+			}
+		}
+
+		XGraph::LineShape::SetLineWidth(WindowSize.x / 500);
+		XGraph::SetColor(User::MainColor);
+		XGraph::LineShape::Line(WindowSize.x / 100 + BarW * 1.2, BarH * 0.1, WindowSize.x / 100 + BarW * 1.2, WindowSize.y / 2 - BarH * 0.1, temp);
+
+		//按钮显示
+		for (int i = 0; i < 2; i++)
+		{
+			XGraph::SetFillColor(i == 0 ? User::MainColor : Color(120, 120, 120));
+			XGraph::RectangleShape::FillRoundRect_WithoutBorder(
+				WindowSize.x / 2 - (ButtomW + UISpace) * (i + 1), WindowSize.y / 2 - ButtomH - UISpace,
+				ButtomW, ButtomH, ButtomH / 3, temp);
+
+			static wstring name[2] = { L"确定",L"取消" };
+			XText::SetFontConfig(i == 0 ? Color(30, 30, 30) : Color::White, FONTSIZE);
+			XText::SetFontAdjust(ADJUST_CENTER, ADJUST_CENTER);
+			XText::Xyprintf(
+				WindowSize.x / 2 - (ButtomW + UISpace) * (i + 1) + ButtomW / 2,
+				WindowSize.y / 2 - ButtomH - UISpace + ButtomH / 2,
+				name[i], temp);
+
+			if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft))
+			{
+				if (XMsg::MouseMsg::IsMouseIn(
+					WindowSize.x / 2 - (ButtomW + UISpace) * (i + 1), WindowSize.y / 2 - ButtomH - UISpace,
+					ButtomW, ButtomH))
+				{
+					if (i == 1)
+					{
+						XMsg::ResetCloseMsg();
+						return -1;
+					}
+					else
+					{
+						XMsg::ResetCloseMsg();
+						return choose;
+					}
+				}
+			}
+		}
+
+		//描述显示
+		if (choose == 0)
+		{
+			static vector<wstring> dis = {
+				L"从本地导入mwf或者图片文件"
+			};
+
+			XText::SetFontConfig(Color::White, FONTSIZE);
+			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
+
+			int y = BarH * 0.5;
+			for (int i = 0;i < dis.size();i++)
+			{
+				XText::Xyprintf(WindowSize.x / 100 + BarW * 1.3, y, dis[i], temp);
+				y += UISpace * 1.3;
+			}
+
+		}
+		if (choose == 1)
+		{
+			static vector<wstring> dis = {
+				L"从手机中上传图片"
+			};
+
+			XText::SetFontConfig(Color::White, FONTSIZE);
+			XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
+			for (int i = 0; i < dis.size(); i++)
+				XText::Xyprintf(WindowSize.x / 100 + BarW * 1.3, BarH * 0.5 + UISpace * i * 1.3, dis[i], temp);
+		}
+
+		if (XMsg::IsClose(temp))
+		{
+			XMsg::ResetCloseMsg();
+			return -1;
+		}
+	}
+
+	XMsg::ResetCloseMsg();
+
+	return -1;
+}
+
+void Get(RenWin& window)
+{
+	NeedEnterGet = false;
+	int type = ChooseGetType(window);
+	if (type == 0)
+	{
+		GetLocal(window);
+	}
+	else if(type == 1)
+	{
+		// type == 1 表示从手机相册上传图片
+		GetMobile(window);
+	}
+	XMsg::ClearMsg();
 }
 
 #pragma endregion
@@ -2481,21 +2659,10 @@ class ExtBar
 
 	wstring ExtenPath = filesystem::current_path().wstring() + L"\\Extens\\";
 
-	void StartClock()
+	void StartExcel()
 	{
-		if (XFile::Exists(ExtenPath + L"Clock.exe"))
-		{
-			ShellExecuteW(NULL, L"open", (ExtenPath + L"Clock.exe").c_str(), NULL, NULL, SW_SHOW);
-
-			BottomMessage::AddMessage(106, L"正在加载：计时器", BottomMessageType_SUCCESS, 180);
-		}
-		else
-		{
-			RightMessage::ShowMessage(
-				L"无法加载定时器插件，这可能是MiuBarrd的配置出现错误，错误代码：NOLNK", L"加载插件", RightMessageType_ERROR);
-
-			BottomMessage::AddMessage(106, L"加载插件失败", BottomMessageType_ERROR, 180);
-		}
+		WriteTable::Add();
+		BottomMessage::AddMessage(106, L"添加表格", BottomMessageType_SUCCESS, 180);
 	}
 	void StartGeometricLibrary()
 	{
@@ -2534,7 +2701,7 @@ class ExtBar
 
 	void Run(wstring path,wstring name = L"未知")
 	{
-		if (path == L"_Clock") StartClock();
+		if (path == L"_Excel") StartExcel();
 		else if (path == L"_GeometricLibrary") StartGeometricLibrary();
 		else if (path == L"_MinNiMiuBarrd") StartMini();
 		else if (path == L"_AI") StartAI();
@@ -2576,13 +2743,13 @@ public:
 #pragma region MyRegion
 
 			static wstring PerExtName[6] = {
-				L"计时器",L"思维导图",L"几何图库",L"迷你黑板",L"语音助手",L"终端"
+				L"表格",L"思维导图",L"几何图库",L"迷你黑板",L"语音助手",L"终端"
 			};
 			static wstring PerExtImageName[6] = {
-				L"Clock.dll",L"MindMap.dll",L"GeometricLibrary.dll",L"MinNiMiuBarrd.dll",L"AI.dll",L"Terminal.dll"
+				L"Excel.dll",L"MindMap.dll",L"GeometricLibrary.dll",L"MinNiMiuBarrd.dll",L"AI.dll",L"Terminal.dll"
 			};
 			static wstring PerExtPath[6] = {
-				L"_Clock",L"_MindMap",L"_GeometricLibrary",L"_MinNiMiuBarrd",L"_AI",L"_Terminal"
+				L"_Excel",L"_MindMap",L"_GeometricLibrary",L"_MinNiMiuBarrd",L"_AI",L"_Terminal"
 			};
 
 			for (int i = 0; i < 6; i++)
@@ -2597,51 +2764,6 @@ public:
 
 				ex.IconScale.SetAnimationStartValue(0);
 				ex.IconScale.SetAnimation(100, TotalFrame);
-			}
-
-			ifstream ExtenConfig(filesystem::current_path().wstring() + L"\\Extens\\Config.ini");
-			if (ExtenConfig.is_open())
-			{
-				while (1)
-				{
-					string temp;
-
-					ExtenConfig >> temp;
-					if (temp.empty()) break;
-
-					exts.emplace_back();
-					exts.back().name = XString::Convert::utf8_to_wstring(temp);
-
-					ExtenConfig >> temp;
-					if (temp.empty())
-					{
-						exts.pop_back(); break;
-					}
-					exts.back().path = XString::Convert::utf8_to_wstring(temp);
-
-					ExtenConfig >> temp;
-					if (temp.empty())
-					{
-						exts.pop_back(); break;
-					}
-					if (!XImage::NewImage(exts.back().img, filesystem::current_path().wstring() + L"\\Exten\\" + XString::Convert::utf8_to_wstring(temp)))
-					{
-						XImage::NewImage(exts.back().img, ImgPath + L"Exten\\Icon.dll");
-					}
-
-					exts.back().IconScale.SetAnimationStartValue(0);
-					exts.back().IconScale.SetAnimation(100, TotalFrame);
-				}
-			}
-			else
-			{
-				ExtenConfig.close();
-
-				ofstream ExtenNew(filesystem::current_path().wstring() + L"\\Extens\\Config.ini");
-				if (!ExtenNew.is_open())
-				{
-					Message::ShowMessage("重建插件引索错误", "错误", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
-				}
 			}
 
 #pragma endregion
@@ -3184,7 +3306,7 @@ public:
 						XImage::PutScaleImage(Icon[i], x, y, ImgScale* IconScale[i].value / 100.0, ImgScale* IconScale[i].value / 100.0,rt, 0.5, 0.5);
 
 						//绘制文字
-						static wstring name[4] = { L"退出",L"保存板书",L"打开图片/文件",L"设置"};
+						static wstring name[4] = { L"退出",L"保存板书",L"导入图片/文件",L"设置"};
 						XText::SetFontConfig(Color(255,255,255, IconTextAlpha[i].value), FONTSIZE * 1.2);
 						XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
 						XText::Xyprintf(IconX[i].value + BasicSize * 1.2, y, name[i], rt);
@@ -4569,9 +4691,9 @@ class TagBox_Camera
 		WriteCamera::PhotoImage();
 	}
 
-	void QRCamera(RenWin& window)
+	void UploadImage(RenWin& window)
 	{
-		WriteCamera::ManageShareCamera(window);
+		ShareWriteImage::ManageShareImage(window);
 	}
 
 	//打开相册照片预览面板
@@ -4711,7 +4833,7 @@ public:
 			}
 
 			//图标初始化
-			wstring ImgNameMore[5] = { L"Photo.dll",L"AutoPhoto.dll",L"Rote.dll",L"Images.dll",L"QRCamera.dll"};
+			wstring ImgNameMore[5] = { L"Photo.dll",L"AutoPhoto.dll",L"Rote.dll",L"Images.dll",L"UploadImage.dll"};
 
 			for(int i = 0;i < 5;i++)
 			{
@@ -4795,16 +4917,13 @@ public:
 					XText::SetFontConfig(Color::White, FONTSIZE);
 					for (int i = 0;i < 5;i++)
 					{
-						static wstring name[5] = { L"拍照",L"自动拍照",L"旋转",L"相册",L"手机投屏"};
+						static wstring name[5] = { L"拍照",L"自动拍照",L"旋转",L"相册",L"手机传图"};
 
 						if (Write::Page > 0) name[0] = L"返回展台";
 						else name[0] = L"拍照";
 
 						if (WriteCamera::EnableAutoPhoto) name[1] = L"关闭自动拍照";
 						else name[1] = L"自动拍照";
-
-						if (WriteCamera::EnableShareCamera) name[4] = L"关闭手机投屏";
-						else name[4] = L"手机投屏";
 
 						float SubScale = MoreIconScale[i].value / 100.0;
 
@@ -4891,10 +5010,10 @@ public:
 						{
 							Album();
 						}
-						//设置
+						//手机传图
 						if (i == 4)
 						{
-							QRCamera(window);
+							UploadImage(window);
 						}
 
 						MoreIconScale[i].SetAnimationStartValue(30);

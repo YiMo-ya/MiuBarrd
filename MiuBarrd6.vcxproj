@@ -165,6 +165,7 @@
     <ClCompile Include="ShareCamera.cpp" />
     <ClCompile Include="Shared.cpp" />
     <ClCompile Include="ShareFile.cpp" />
+    <ClCompile Include="ShareImage.cpp" />
     <ClCompile Include="SoundPlayer.cpp" />
     <ClCompile Include="Tool.cpp" />
     <ClCompile Include="Update.cpp" />
@@ -189,6 +190,7 @@
     <ClInclude Include="ShareCamera.h" />
     <ClInclude Include="Shared.h" />
     <ClInclude Include="ShareFile.h" />
+    <ClInclude Include="ShareImage.h" />
     <ClInclude Include="SoundPlayer.h" />
     <ClInclude Include="Tool.h" />
     <ClInclude Include="Update.h" />

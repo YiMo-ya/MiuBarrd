@@ -1,5 +1,7 @@
 ﻿#include "ShareCamera.h"
+#include "ShareImage.h"
 #include "ShareFile.h"
+#include "ShareImage.h"
 #include "Write.h"
 #include "Tool.h"
 #include "Shared.h"
@@ -1419,6 +1421,16 @@ static void MindMapShiftStrokes(const vector<pair<int, int>>& hits, Vector2i off
 			d.StartX += offset.x;
 			d.StartY += offset.y;
 		}
+
+		// 关键：曲线采样点（世界坐标）必须同步平移。
+		// 绘制阶段只要 CurvePts 非空就走 SDFBatchPushCurve，完全忽略 x/y 与 x2/y2；
+		// 若只平移端点而不动采样点，数据虽然搬走了、画面上仍停在旧位置，
+		// 表现为「节点移动时笔迹不跟着动」。与 TableShiftStroke 保持同一口径。
+		for (auto& p : d.CurvePts)
+		{
+			p.x += (float)offset.x;
+			p.y += (float)offset.y;
+		}
 	}
 }
 
@@ -2479,6 +2491,1131 @@ void MindMap::Draw(RenderTarget& dest)
 
 #pragma endregion
 
+//表格
+#pragma region MyRegion
+
+//单行的默认高度（世界单位）。仅作为「新增行」的初始高度，
+// 实际高度保存在 TableRowHeights 中并可被书写内容动态撑高。
+static int TableRowH()
+{
+	static int h = max(24, WindowSize.y / 12);
+	return h;
+}
+
+//单列的默认宽度（世界单位）。与 TableRowH 同理，实际宽度见 TableColWidths。
+static int TableColW()
+{
+	static int w = max(40, WindowSize.x / 10);
+	return w;
+}
+
+/// <summary>
+/// 单张表格的全部状态（原来是一组全局变量，改为结构体以支持同一页面多张表格）。
+/// 每张表格拥有独立的左上角坐标、行列数量与行列尺寸数组，
+/// 互不影响地独立增删行列与动态撑开。
+/// </summary>
+struct TableNode
+{
+	int X = 0;                      /// 表格左上角横坐标（世界坐标）
+	int Y = 0;                      /// 表格左上角纵坐标（世界坐标）
+	int Rows = 3;                   /// 行数量（含表头行，行 0 承担表头职责）
+	int Cols = 3;                   /// 列数量（含表头列，列 0 承担表头职责）
+	vector<int> RowHeights;         /// 各行实际高度（世界单位），可被书写内容撑高
+	vector<int> ColWidths;          /// 各列实际宽度（世界单位），可被书写内容撑宽
+};
+
+//同一页面上的所有表格（按添加顺序）。空表示当前页没有表格。
+// 需求变更：不再限制「每页只允许一张表格」，改为允许多张表格共存于同一页。
+static vector<TableNode> TableNodes;
+
+//当前参与「动态撑开 / 动态增删」等交互的表格下标。
+// 多表格共存后必须明确操作对象，避免一张表的笔迹把另一张表的行列撑大。
+static int TableActIdx = -1;
+
+//取当前激活表格；无激活表格时返回 nullptr
+static TableNode* CurTable()
+{
+	if (TableActIdx < 0 || TableActIdx >= (int)TableNodes.size()) return nullptr;
+	return &TableNodes[TableActIdx];
+}
+
+//把行列尺寸数组补齐到当前行列数，并夹紧非法值（<=0 时回落默认尺寸）
+static void TableEnsureSize(TableNode& t)
+{
+	if ((int)t.RowHeights.size() != t.Rows)
+		t.RowHeights.resize(t.Rows, TableRowH());
+	if ((int)t.ColWidths.size() != t.Cols)
+		t.ColWidths.resize(t.Cols, TableColW());
+
+	for (auto& h : t.RowHeights)
+		if (h < TableRowH()) h = TableRowH();
+	for (auto& w : t.ColWidths)
+		if (w < TableColW()) w = TableColW();
+}
+
+//第 row 行的上边界纵坐标（世界坐标），累加前面各行高度得到
+static int TableRowTop(TableNode& t, int row)
+{
+	TableEnsureSize(t);
+	int y = t.Y;
+	for (int i = 0; i < row && i < (int)t.RowHeights.size(); i++) y += t.RowHeights[i];
+	return y;
+}
+
+//第 col 列的左边界横坐标（世界坐标），累加前面各列宽度得到
+static int TableColLeft(TableNode& t, int col)
+{
+	TableEnsureSize(t);
+	int x = t.X;
+	for (int i = 0; i < col && i < (int)t.ColWidths.size(); i++) x += t.ColWidths[i];
+	return x;
+}
+
+//第 row 行的实际高度
+static int TableRowSize(TableNode& t, int row)
+{
+	TableEnsureSize(t);
+	if (row < 0 || row >= (int)t.RowHeights.size()) return TableRowH();
+	return t.RowHeights[row];
+}
+
+//第 col 列的实际宽度
+static int TableColSize(TableNode& t, int col)
+{
+	TableEnsureSize(t);
+	if (col < 0 || col >= (int)t.ColWidths.size()) return TableColW();
+	return t.ColWidths[col];
+}
+
+//+ / - 圆形按钮半径（世界单位）。取单元格短边的比例并夹紧，
+// 保证在小屏/大屏下按钮都不会盖住整个单元格。
+static int TableBtnR()
+{
+	int cell = min(TableRowH(), TableColW());
+	static int r = max(6, (int)(cell * 0.16));
+	return r;
+}
+
+//表格是否处于激活状态（当前页至少存在一张表格）。
+// 多表格改造后它只表示「有表格可交互」，具体操作对象由 TableActIdx 指明。
+static bool TableActived = false;
+
+//- 按钮圆心相对单元格「右上角」的内缩像素数：
+// 需求要求 - 号位于单元格内部右上角，内缩量取半径 + 少量呼吸空间。
+static int TableBtnInset()
+{
+	static int in = max(3, TableBtnR() / 3);
+	return in;
+}
+
+//本帧触控是否落在表格按钮上（供书写系统跳过落笔）
+static bool TableBtnHit = false;
+//本次触控周期内是否曾命中过按钮（粘滞标记，防按住时坐标漂移导致穿透）
+static bool TableWasBtnHit = false;
+//上一次触控状态：用于识别"按下的一瞬间"
+static bool TableLastTouch = false;
+//「按钮按住中」标记：从命中按钮持续到抬手，防止残留笔迹影响后续判定
+static bool TableBtnHold = false;
+//本次触控是否起始于表格区域内部：用于防止点击按钮时触控穿透到画布留下笔迹
+static bool TableAreaHold = false;
+
+// --- 动态拓展用的笔迹搬移函数（前向声明） ---
+// 定义位于 TableAutoExpand 之后：先声明以便表格更新流程调用。
+static void TableShiftStrokesBelowY(int boundaryY, int dy);
+static void TableShiftStrokesRightOfX(int boundaryX, int dx);
+static void TableShiftAllStrokes(int dx, int dy);
+static void TableEraseNode(int idx);
+
+//按「行、列」计算单元格左上角（世界坐标）。
+// 改用累加前缀尺寸：行的高度/列的宽度可被书写内容撑大，不再等距。
+static Vector2i TableCellPos(TableNode& t, int row, int col)
+{
+	return { TableColLeft(t, col), TableRowTop(t, row) };
+}
+
+//整张表格的纵向下边界（世界坐标）
+static int TableBottom(TableNode& t)
+{
+	TableEnsureSize(t);
+
+	int y = t.Y;
+	for (auto& h : t.RowHeights) y += h;
+	return y;
+}
+
+//整张表格的横向右边界（世界坐标）
+static int TableRight(TableNode& t)
+{
+	TableEnsureSize(t);
+
+	int x = t.X;
+	for (auto& w : t.ColWidths) x += w;
+	return x;
+}
+
+//把表格整体夹回画布可见范围：新增行列后表格可能右/下溢出，
+// 这里只在越界时整体平移，保证用户始终能看到 + 按钮。
+static void TableClampToView(TableNode& t)
+{
+	auto& pd = GetCurPage();
+	float scale = pd.Scale / 100.0f;
+	if (scale <= 0.0001f) return;
+
+	// 视口在世界坐标下的右/下边界（屏幕 -> 世界）
+	int viewRight = (int)(WindowSize.x / scale) - pd.CameraPos.x;
+	int viewBottom = (int)(WindowSize.y / scale) - pd.CameraPos.y;
+
+	// 只保证表格左/上边界不被推出画面之外的负方向
+	if (t.X < 0) t.X = 0;
+	if (t.Y < 0) t.Y = 0;
+
+	// 右/下溢出时整体回拉，留出按钮所在的一点余量
+	int overR = TableRight(t) - viewRight;
+	if (overR > 0) t.X -= overR;
+	int overB = TableBottom(t) - viewBottom;
+	if (overB > 0) t.Y -= overB;
+
+	if (t.X < 0) t.X = 0;
+	if (t.Y < 0) t.Y = 0;
+}
+
+//把一段笔迹整体平移 (dx, dy)（世界坐标），四个端点与柳叶笔起点都要跟着走
+static void TableShiftStroke(WriteData& d, int dx, int dy)
+{
+	d.x += dx; d.y += dy;
+	d.x2 += dx; d.y2 += dy;
+
+	// 柳叶笔用 StartX/StartY 记录起始点，负值表示未使用
+	if (!(d.StartX < 0 && d.StartY < 0))
+	{
+		d.StartX += dx;
+		d.StartY += dy;
+	}
+
+	// 曲线采样点（世界坐标）同样需要平移，否则 SDF 绘制仍走旧位置
+	for (auto& p : d.CurvePts)
+	{
+		p.x += (float)dx;
+		p.y += (float)dy;
+	}
+}
+
+//判断一段笔迹的几何中心是否落在指定矩形内（世界坐标）。
+// 与思维导图一致采用「中心点归属」而非包围盒相交：
+// 中心点在平面内唯一，相邻单元格不会重复命中同一条笔迹。
+static bool TableStrokeInRect(const WriteData& d, int l, int t, int r, int b, int tolPx)
+{
+	float cx = (d.x + d.x2) * 0.5f;
+	float cy = (d.y + d.y2) * 0.5f;
+
+	// 柳叶笔的 StartX/StartY 参与中心点计算，避免大面积填充笔迹中心偏移
+	if (!(d.StartX < 0 && d.StartY < 0))
+	{
+		cx = (cx + d.StartX) * 0.5f;
+		cy = (cy + d.StartY) * 0.5f;
+	}
+
+	return (cx >= l - tolPx && cx <= r + tolPx &&
+		cy >= t - tolPx && cy <= b + tolPx);
+}
+
+//收集「指定矩形区域」内的笔迹下标（按当前页 Data 索引）。
+static void TableCollectHitsInRect(int l, int t, int r, int b, vector<pair<int, int>>& outHits)
+{
+	auto& page = GetCurPage();
+
+	// 容差取笔宽量级：手写笔画的中心点常落在单元格边界附近，
+	// 完全不外扩会漏删「压线」的内容。
+	int tol = max(4, Tool::PenSize);
+	for (int a = 0; a < (int)page.Data.size(); a++)
+	{
+		for (int k = 0; k < (int)page.Data[a].size(); k++)
+		{
+			if (TableStrokeInRect(page.Data[a][k], l, t, r, b, tol))
+				outHits.push_back({ a, k });
+		}
+	}
+}
+
+//删除一组笔迹（下标需按行/列升序），内部倒序删除保证下标有效
+static void TableDeleteStrokes(vector<pair<int, int>>& hits)
+{
+	if (hits.empty()) return;
+
+	sort(hits.begin(), hits.end());
+	hits.erase(unique(hits.begin(), hits.end()), hits.end());
+
+	auto& page = GetCurPage();
+
+	// 倒序删除：先删后面的元素，前面元素下标不受影响
+	for (int i = (int)hits.size() - 1; i >= 0; i--)
+	{
+		int a = hits[i].first;
+		int b = hits[i].second;
+
+		if (a < 0 || a >= (int)page.Data.size()) continue;
+		if (b < 0 || b >= (int)page.Data[a].size()) continue;
+
+		page.Data[a].erase(page.Data[a].begin() + b);
+	}
+}
+
+//把「第 col 列右侧」全部笔迹整体左移一个列宽。
+// 用于删除中间列后右侧单元格内容跟着左移，保持「表格与内容对齐」。
+static void TableShiftStrokesLeftOfCol(TableNode& t, int col)
+{
+	if (col < 0 || col >= t.Cols) return;
+
+	auto& page = GetCurPage();
+
+	int boundaryL = TableColLeft(t, col);
+	int boundaryR = boundaryL + TableColSize(t, col);
+	int tol = max(4, Tool::PenSize);
+
+	for (int a = 0; a < (int)page.Data.size(); a++)
+	{
+		for (int k = 0; k < (int)page.Data[a].size(); k++)
+		{
+			// 只搬动「完全位于被删列右侧」的笔迹，被删列本身已在上一步删除
+			if (TableStrokeInRect(page.Data[a][k], boundaryR, INT_MIN / 4, INT_MAX / 4, INT_MAX / 4, -tol))
+				continue;
+
+			auto& d = page.Data[a][k];
+
+			float cx = (d.x + d.x2) * 0.5f;
+			if (!(d.StartX < 0 && d.StartY < 0)) cx = (cx + d.StartX) * 0.5f;
+
+			if ((int)cx >= boundaryR - tol)
+				TableShiftStroke(d, -TableColSize(t, col), 0);
+		}
+	}
+}
+
+//把「第 row 行下方」全部笔迹整体上移一个行高（删除中间行后的同列上移）
+static void TableShiftStrokesAboveRow(TableNode& t, int row)
+{
+	if (row < 0 || row >= t.Rows) return;
+
+	auto& page = GetCurPage();
+
+	// 使用该行的「实际高度」作为位移量：行高可能已被书写内容撑大，
+	// 若仍按默认高度搬移，下方内容会与网格错位。
+	int rowH = TableRowSize(t, row);
+	int boundaryT = TableRowTop(t, row);
+	int boundaryB = boundaryT + rowH;
+	int tol = max(4, Tool::PenSize);
+
+	for (int a = 0; a < (int)page.Data.size(); a++)
+	{
+		for (int k = 0; k < (int)page.Data[a].size(); k++)
+		{
+			auto& d = page.Data[a][k];
+
+			float cy = (d.y + d.y2) * 0.5f;
+			if (!(d.StartX < 0 && d.StartY < 0)) cy = (cy + d.StartY) * 0.5f;
+
+			if ((int)cy >= boundaryB - tol)
+				TableShiftStroke(d, 0, -rowH);
+		}
+	}
+}
+
+//删除指定列（连带删除该列内笔迹，并把右侧内容左移对齐）
+// idx 为该表格在 TableNodes 中的下标：删到只剩一列时整表移除，需要按下标从容器中摘除。
+static void TableRemoveCol(int idx, int col)
+{
+	if (idx < 0 || idx >= (int)TableNodes.size()) return;
+	TableNode& t = TableNodes[idx];
+
+	if (col < 0 || col >= t.Cols) return;
+
+	// 只剩最后一列时，删除该列意味着「整张表格彻底消失」：
+	// 先把表格覆盖区域内的笔迹全部连带删除，再关闭表格。
+	// 这正是需求「即使只剩一个单元格也要显示 -，点击后完全删除」的落点。
+	if (t.Cols <= 1)
+	{
+		vector<pair<int, int>> lastHits;
+		TableCollectHitsInRect(t.X, t.Y, TableRight(t), TableBottom(t), lastHits);
+		TableDeleteStrokes(lastHits);
+
+		TableEraseNode(idx);
+		FlushWriteLayer = true;
+		return;
+	}
+
+	int l = TableColLeft(t, col);
+	int r = l + TableColSize(t, col);
+
+	// ① 先删除该列覆盖区域内的笔迹
+	vector<pair<int, int>> hits;
+	TableCollectHitsInRect(l, t.Y, r, TableBottom(t), hits);
+	TableDeleteStrokes(hits);
+
+	// ② 再让右侧内容左移，保持与表格网格对齐
+	TableShiftStrokesLeftOfCol(t, col);
+
+	// 删除列：同步从尺寸数组移除对应项，否则后续列会沿用被删除列的宽度
+	TableEnsureSize(t);
+	if (col < (int)t.ColWidths.size())
+		t.ColWidths.erase(t.ColWidths.begin() + col);
+
+	t.Cols -= 1;
+
+	FlushWriteLayer = true;
+}
+
+//删除指定行（连带删除该行内笔迹，并把下方内容上移对齐）
+static void TableRemoveRow(int idx, int row)
+{
+	if (idx < 0 || idx >= (int)TableNodes.size()) return;
+	TableNode& t = TableNodes[idx];
+
+	if (row < 0 || row >= t.Rows) return;
+
+	// 只剩最后一行时，删除该行等同于整张表格消失（同 TableRemoveCol 的处理）
+	if (t.Rows <= 1)
+	{
+		vector<pair<int, int>> lastHits;
+		TableCollectHitsInRect(t.X, t.Y, TableRight(t), TableBottom(t), lastHits);
+		TableDeleteStrokes(lastHits);
+
+		TableEraseNode(idx);
+		FlushWriteLayer = true;
+		return;
+	}
+
+	int top = TableRowTop(t, row);
+	int b = top + TableRowSize(t, row);
+
+	// ① 删除该行覆盖区域内的笔迹
+	vector<pair<int, int>> hits;
+	TableCollectHitsInRect(t.X, top, TableRight(t), b, hits);
+	TableDeleteStrokes(hits);
+
+	// ② 再让下方内容上移，保持与表格网格对齐
+	TableShiftStrokesAboveRow(t, row);
+
+	// 删除行：同步从尺寸数组移除对应项，否则后续行会沿用被删除行的高度
+	TableEnsureSize(t);
+	if (row < (int)t.RowHeights.size())
+		t.RowHeights.erase(t.RowHeights.begin() + row);
+
+	t.Rows -= 1;
+
+	FlushWriteLayer = true;
+}
+
+//新增一列：新列追加在最右侧，其覆盖区域为空白，无需搬移笔迹
+static void TableAddCol(TableNode& t)
+{
+	TableEnsureSize(t);
+
+	t.Cols += 1;
+	t.ColWidths.push_back(TableColW());
+
+	TableClampToView(t);
+	FlushWriteLayer = true;
+}
+
+//新增一行：新行追加在最底部，其覆盖区域为空白，无需搬移笔迹
+static void TableAddRow(TableNode& t)
+{
+	TableEnsureSize(t);
+
+	t.Rows += 1;
+	t.RowHeights.push_back(TableRowH());
+
+	TableClampToView(t);
+	FlushWriteLayer = true;
+}
+
+//「列末尾 +」按钮圆心（世界坐标）：位于第一行末尾、表格右侧外一点
+static Vector2i TableAddColBtnPos(TableNode& t)
+{
+	int r = TableBtnR();
+	return { TableRight(t) + r + TableBtnInset(), TableRowTop(t, 0) + TableRowSize(t, 0) / 2 };
+}
+
+//「行末尾 +」按钮圆心（世界坐标）：位于第一列末尾、表格下方外一点
+static Vector2i TableAddRowBtnPos(TableNode& t)
+{
+	int r = TableBtnR();
+	return { TableColLeft(t, 0) + TableColSize(t, 0) / 2, TableBottom(t) + r + TableBtnInset() };
+}
+
+//表头单元格右上角的「-」按钮圆心（世界坐标）。
+// 说明：- 按钮画在单元格内部右上角，圆心相对右上角内缩 inset + r。
+static Vector2i TableDelBtnPos(TableNode& t, int row, int col)
+{
+	int r = TableBtnR();
+	int in = TableBtnInset();
+
+	int cellR = TableColLeft(t, col) + TableColSize(t, col);
+	int cellT = TableRowTop(t, row);
+
+	return { cellR - in - r, cellT + in + r };
+}
+
+//从容器中摘除第 idx 张表格，并修正「当前操作表格」下标。
+// 用于把某张表删到只剩 1 行/1 列时整表移除的情形。
+static void TableEraseNode(int idx)
+{
+	if (idx < 0 || idx >= (int)TableNodes.size()) return;
+
+	TableNodes.erase(TableNodes.begin() + idx);
+
+	// 下标体系变化后同步修正：删掉的若是当前操作表，回退到相邻表；
+	// 否则当前下标可能需要前移一位。
+	if (TableActIdx == idx) TableActIdx = (int)TableNodes.size() - 1;
+	else if (TableActIdx > idx) TableActIdx -= 1;
+
+	// 没有任何表格时同步复位命中状态，避免残留的按钮屏蔽影响书写
+	if (TableNodes.empty())
+	{
+		TableActIdx = -1;
+		TableActived = false;
+		TableBtnHit = false;
+		TableWasBtnHit = false;
+		TableBtnHold = false;
+		TableAreaHold = false;
+		TableLastTouch = false;
+	}
+	else
+	{
+		TableActived = true;
+		if (TableActIdx < 0) TableActIdx = (int)TableNodes.size() - 1;
+	}
+}
+
+void WriteTable::Add()
+{
+	// 同一页面允许多张表格共存：每次点击「表格」插件都新增一张独立表格，
+	// 不再因为已存在表格而拒绝添加。
+	TableNode t;
+
+	// 初始尺寸：3 行 3 列（含表头行/列），用户用 + 按钮继续扩展
+	t.Rows = 3;
+	t.Cols = 3;
+
+	// 新表格从默认等距网格开始，避免沿用别的表格被撑大后的尺寸
+	t.RowHeights.assign(t.Rows, TableRowH());
+	t.ColWidths.assign(t.Cols, TableColW());
+
+	// 初始坐标：按当前视口可见区域的中心居中。
+	// 屏幕坐标 -> 世界坐标：world = screen / scale - CameraPos（与思导图 Update 一致）。
+	auto& pd = GetCurPage();
+	float scale = pd.Scale / 100.0f;
+	if (scale <= 0.0001f) scale = 1.0f;
+
+	int viewW = (int)(WindowSize.x / scale);
+	int viewH = (int)(WindowSize.y / scale);
+
+	// 表格外框尺寸（不含 + 按钮的外扩部分）。
+	// 取尺寸数组的累加值而非「行列数 × 默认尺寸」，这样后续被撑大的尺寸也能正确居中。
+	TableEnsureSize(t);
+	int tableW = 0, tableH = 0;
+	for (auto& w : t.ColWidths) tableW += w;
+	for (auto& h : t.RowHeights) tableH += h;
+
+	int centerX = viewW / 2 - pd.CameraPos.x;
+	int centerY = viewH / 2 - pd.CameraPos.y;
+
+	// 多表共存时做阶梯错位：按已存在表格数量把新表右下偏移一个按钮直径，
+	// 让用户能直观看到「又加了一张表」，也便于分别点击各自的 + / - 按钮。
+	int offset = (int)TableNodes.size() * (TableBtnR() * 2 + TableBtnInset());
+
+	t.X = centerX - tableW / 2 + offset;
+	t.Y = centerY - tableH / 2 + offset;
+
+	TableClampToView(t);
+
+	TableNodes.push_back(t);
+
+	// 新添加的表格成为当前操作对象
+	TableActIdx = (int)TableNodes.size() - 1;
+	TableActived = true;
+
+	// 命中状态复位：避免上一张表的按钮粘滞标记影响新表的首帧交互
+	TableBtnHit = false;
+	TableWasBtnHit = false;
+	TableBtnHold = false;
+	TableAreaHold = false;
+	TableLastTouch = false;
+
+	FlushWriteLayer = true;
+}
+
+void WriteTable::Clear()
+{
+	// 清屏语义：移除当前页「全部」表格，而不只是清空某一 张
+	TableNodes.clear();
+	TableActIdx = -1;
+
+	TableActived = false;
+	TableBtnHit = false;
+	TableWasBtnHit = false;
+	TableBtnHold = false;
+	TableAreaHold = false;
+	TableLastTouch = false;
+}
+
+bool WriteTable::IsActive()
+{
+	return TableActived && !TableNodes.empty();
+}
+
+Vector2i WriteTable::GetOrigin()
+{
+	// 返回当前操作表格的左上角；无表格时回落 (0,0)
+	TableNode* t = CurTable();
+	if (!t) return { 0, 0 };
+	return { t->X, t->Y };
+}
+
+bool WriteTable::IsBtnHit()
+{
+	return TableBtnHit;
+}
+
+/// <summary>
+/// 按当前书写笔迹自动撑高行 / 撑宽列（表格的动态拓展）。
+/// 与思维导图「内容越界即延展」的思路一致：只统计本次落笔的临时笔迹副本，
+/// 当其纵向越过所在行的下边界、或横向越过所在列的右边界时，
+/// 把该行高度 / 该列宽度增到刚好容纳，使同行（同列）内容与网格线一起避让。
+/// 只增不减：避免抬笔或擦除后网格突然回缩产生跳动。
+/// </summary>
+/// <param name="t">参与动态撑开的目标表格。</param>
+static void TableAutoExpand(TableNode& t)
+{
+	if (WriteDataTemp.empty()) return;
+
+	// 按钮操作期间产生的残留笔迹不应撑大表格（与思维导图 CanAddLineLengh 同语义）
+	if (TableBtnHold || TableWasBtnHit || TableAreaHold) return;
+
+	TableEnsureSize(t);
+
+	// 落笔点与格线之间的「预撑余量」：笔尖距离格线少于该值时即开始撑开，
+	// 从而表现为「快要碰到边缘时就撑开」，而不是等笔迹压到格线上才突然弹开。
+	// 取 4 倍笔宽作为下限（较原 2 倍放大一倍），使临界更早到来、撑开更从容。
+	int padX = max(24, Tool::PenSize * 8);
+	int padY = max(24, Tool::PenSize * 8);
+
+	// 用「被撑大前的尺寸快照」做归属判定，避免前面撑大后又影响后续笔迹的归属
+	vector<int> oldRowH = t.RowHeights;
+	vector<int> oldColW = t.ColWidths;
+
+	// 各行 / 各列的边界（世界坐标），由快照累加得到
+	vector<int> rowTop(t.Rows + 1), colLeft(t.Cols + 1);
+	rowTop[0] = t.Y;
+	for (int i = 0; i < t.Rows; i++) rowTop[i + 1] = rowTop[i] + oldRowH[i];
+	colLeft[0] = t.X;
+	for (int i = 0; i < t.Cols; i++) colLeft[i + 1] = colLeft[i] + oldColW[i];
+
+	int tableR = colLeft[t.Cols];
+	int tableB = rowTop[t.Rows];
+
+	// 每个行 / 列各自的追加量：只累计「本位行 / 本位列」自身的需求。
+	// 旧实现把单个最大值套用到所有行列，结果整张表格被整体撑大，
+	// 与需求「上下拓展只改那一行、左右拓展只改那一列」相违，已废弃。
+	vector<int> addH(t.Rows, 0);
+	vector<int> addW(t.Cols, 0);
+
+	for (auto& d : WriteDataTemp)
+	{
+		// 取笔迹的四个端点包围盒（含柳叶笔起点），与撤销/擦除的判定口径保持一致
+		float minX = min(d.x, d.x2);
+		float maxX = max(d.x, d.x2);
+		float minY = min(d.y, d.y2);
+		float maxY = max(d.y, d.y2);
+		if (!(d.StartX < 0 && d.StartY < 0))
+		{
+			minX = min(minX, (float)d.StartX);
+			maxX = max(maxX, (float)d.StartX);
+			minY = min(minY, (float)d.StartY);
+			maxY = max(maxY, (float)d.StartY);
+		}
+
+		// 笔迹横向 / 纵向中心用于定位所属的列与行
+		int cx = (int)((minX + maxX) * 0.5f);
+		int cy = (int)((minY + maxY) * 0.5f);
+
+		// 完全落在表格之外（例如在画布别处书写）则不参与撑开。
+		// 容差取预撑余量的两倍，使「贴着表格外侧书写」也能带动边缘的行列生长。
+		if (cx < t.X || cx > tableR + padX * 2 || cy < t.Y || cy > tableB + padY * 2) continue;
+
+		// 定位所属行：找到包含中心的最后一行（越界视作最后一行继续向下延展）
+		int row = t.Rows - 1;
+		for (int i = 0; i < t.Rows; i++)
+		{
+			if (cy < rowTop[i + 1]) { row = i; break; }
+		}
+
+		// 定位所属列
+		int col = t.Cols - 1;
+		for (int i = 0; i < t.Cols; i++)
+		{
+			if (cx < colLeft[i + 1]) { col = i; break; }
+		}
+
+		// 纵向预撑：笔迹底边离该行下边界不足 padY 时就提前撑开本行。
+		// 注意只与「本行」比较，因此上下拓展只会改变当前行的高度。
+		int needH = (int)maxY + padY - rowTop[row + 1];
+		if (needH > addH[row]) addH[row] = needH;
+
+		// 横向预撑：笔迹右边离该列右边界不足 padX 时提前撑开本列。
+		// 同样只与「本列」比较，因此左右拓展只会改变当前列的宽度。
+		int needW = (int)maxX + padX - colLeft[col + 1];
+		if (needW > addW[col]) addW[col] = needW;
+	}
+
+	// 是否存在需要生长的行 / 列
+	bool growRow = false, growCol = false;
+	for (int i = 0; i < t.Rows; i++) if (addH[i] > 0) { growRow = true; break; }
+	for (int i = 0; i < t.Cols; i++) if (addW[i] > 0) { growCol = true; break; }
+	if (!growRow && !growCol) return;
+
+	// ① 行高生长：从最下面的行往上处理。
+	// 这样某行撑大后，其下方笔迹先被搬走，上方行再搬移时不会重复搬动它们。
+	for (int i = t.Rows - 1; i >= 0; i--)
+	{
+		if (addH[i] <= 0) continue;
+
+		// 该行「撑开前」的下边界：中心点纵坐标大于等于此值的笔迹属于该行下方，
+		// 需要跟随行高增长一起向下平移，否则会与网格错位。
+		int boundary = rowTop[i + 1];
+		t.RowHeights[i] += addH[i];
+		TableShiftStrokesBelowY(boundary, addH[i]);
+	}
+
+	// ② 列宽生长：从最右边的列往左处理，理由同上（避免重复搬移）。
+	for (int i = t.Cols - 1; i >= 0; i--)
+	{
+		if (addW[i] <= 0) continue;
+
+		int boundary = colLeft[i + 1];
+		t.ColWidths[i] += addW[i];
+		TableShiftStrokesRightOfX(boundary, addW[i]);
+	}
+
+	// ③ 尺寸变大后表格可能下 / 右溢出视口，整表夹回可见范围。
+	// TableClampToView 只平移表格左上角而不动笔迹，
+	// 因此这里按位移量把整页笔迹一起搬，保证「表移动、内容跟着移动」。
+	int oldX = t.X;
+	int oldY = t.Y;
+	TableClampToView(t);
+	int dx = t.X - oldX;
+	int dy = t.Y - oldY;
+	if (dx != 0 || dy != 0)
+		TableShiftAllStrokes(dx, dy);
+
+	FlushWriteLayer = true;
+}
+
+//把「中心点纵坐标 >= 指定线」的已落笔笔迹整体下移 dy。
+// 用于行高生长后，让该行下方的单元格内容跟随网格下移，保持对齐。
+// 只处理已落笔数据（页面 Data），本次临时笔迹已画在正确位置，无需搬移。
+static void TableShiftStrokesBelowY(int boundaryY, int dy)
+{
+	if (dy == 0) return;
+
+	auto& page = GetCurPage();
+
+	for (int a = 0; a < (int)page.Data.size(); a++)
+	{
+		for (int k = 0; k < (int)page.Data[a].size(); k++)
+		{
+			auto& d = page.Data[a][k];
+
+			// 与 TableShiftStrokesAboveRow 使用同一套中心点口径（含柳叶笔起点）
+			float cy = (d.y + d.y2) * 0.5f;
+			if (!(d.StartX < 0 && d.StartY < 0)) cy = (cy + d.StartY) * 0.5f;
+
+			if ((int)cy >= boundaryY)
+				TableShiftStroke(d, 0, dy);
+		}
+	}
+}
+
+//把「中心点横坐标 >= 指定线」的已落笔笔迹整体右移 dx。
+// 用于列宽生长后，让该列右侧的单元格内容跟随网格右移，保持对齐。
+static void TableShiftStrokesRightOfX(int boundaryX, int dx)
+{
+	if (dx == 0) return;
+
+	auto& page = GetCurPage();
+
+	for (int a = 0; a < (int)page.Data.size(); a++)
+	{
+		for (int k = 0; k < (int)page.Data[a].size(); k++)
+		{
+			auto& d = page.Data[a][k];
+
+			float cx = (d.x + d.x2) * 0.5f;
+			if (!(d.StartX < 0 && d.StartY < 0)) cx = (cx + d.StartX) * 0.5f;
+
+			if ((int)cx >= boundaryX)
+				TableShiftStroke(d, dx, 0);
+		}
+	}
+}
+
+//把当前页「全部」已落笔笔迹整体平移 (dx, dy)。
+// 用于表格被 TableClampToView 夹回视口时，让表与内容同步位移。
+static void TableShiftAllStrokes(int dx, int dy)
+{
+	if (dx == 0 && dy == 0) return;
+
+	auto& page = GetCurPage();
+
+	for (int a = 0; a < (int)page.Data.size(); a++)
+		for (int k = 0; k < (int)page.Data[a].size(); k++)
+			TableShiftStroke(page.Data[a][k], dx, dy);
+}
+
+void WriteTable::Update()
+{
+	// 未激活：清空所有命中状态，不做任何交互判定
+	if (!TableActived || TableNodes.empty())
+	{
+		TableBtnHit = false;
+		TableWasBtnHit = false;
+		TableBtnHold = false;
+		TableAreaHold = false;
+		TableLastTouch = false;
+		return;
+	}
+
+	// 动态拓展：书写内容越界时自动撑高行 / 撑宽列（表格版的「思维导图延展」）。
+	// 多表格共存时必须逐表判断：笔迹只会撑大它所属的那一张表，
+	// 否则在两表之间书写会把两张表同时撑开。
+	for (auto& tn : TableNodes) TableAutoExpand(tn);
+
+	Vector2i screenPos = XMsg::TouchMsg::GetTouchPos();
+	bool touching = IsTouching();
+
+	// 识别"按下的一瞬间"，避免长按按钮连续增删
+	bool pressed = touching && !TableLastTouch;
+	TableLastTouch = touching;
+
+	// 世界 -> 屏幕：与 Draw 使用完全相同的表达式与取整顺序，
+	// 保证命中点与视觉点逐像素重合（缩放后不会系统性偏移）。
+	auto& pd = GetCurPage();
+	float scale = pd.Scale / 100.0f;
+	if (scale <= 0.0001f) return;
+
+	float camX = pd.CameraPos.x * scale;
+	float camY = pd.CameraPos.y * scale;
+	auto SX = [&](int x) { return (int)(x * scale + camX); };
+	auto SY = [&](int y) { return (int)(y * scale + camY); };
+
+	// 命中半径：世界半径映射到屏幕后加少量固定容差（手指接触面积）
+	int r = TableBtnR();
+	int hitR = max(2, (int)(r * scale) + 2);
+	int hitR2 = hitR * hitR;
+
+	auto HitCircle = [&](Vector2i center) -> bool
+		{
+			int cx = SX(center.x);
+			int cy = SY(center.y);
+			int dx = screenPos.x - cx;
+			int dy = screenPos.y - cy;
+			return dx * dx + dy * dy <= hitR2;
+		};
+
+	// 只在「按钮附近」屏蔽：需求是「在表格里可以正常写字，只有按钮区域不能穿透」，
+	// 所以这里不能再把整张表格外框都算作命中——那样表格内部就完全写不进字了。
+	// 仅对按钮圆做圆形命中又太窄：手指实际接触面积大于视觉圆，按下点略微偏出
+	// 按钮边缘就会漏屏蔽，从而穿透到画布留下短笔画。
+	// 折中方案：以每个按钮圆心为中心，取 hitR 的若干倍作为方形安全区，
+	// 既覆盖手指的接触误差，又不会侵占单元格的书写空间。
+	int safeHalf = hitR * 2;   // 安全区半边长（屏幕像素），约等于按钮直径
+	auto HitSafe = [&](Vector2i center) -> bool
+		{
+			int cx = SX(center.x);
+			int cy = SY(center.y);
+			return (abs(screenPos.x - cx) <= safeHalf && abs(screenPos.y - cy) <= safeHalf);
+		};
+
+	// ---------- 逐表命中检测 ----------
+	// 多表格共存后，一次触控可能落在任意一张表上，因此需要遍历全部表格：
+	//   hitIdx  = 命中的表格下标（-1 表示没有命中任何按钮）
+	//   其余变量记录该表上具体命中的是哪个 + / - 按钮
+	int hitIdx = -1;
+	bool hoverAddCol = false;
+	bool hoverAddRow = false;
+	int hoverDelRow = -1;   // 待删除的行号（由第一列的 - 触发）
+	int hoverDelCol = -1;   // 待删除的列号（由第一行的 - 触发）
+	bool inBtnArea = false; // 触控点是否落在任一表格的按钮安全区内
+
+	for (int ti = 0; ti < (int)TableNodes.size(); ti++)
+	{
+		TableNode& t = TableNodes[ti];
+
+		bool addCol = HitCircle(TableAddColBtnPos(t));
+		bool addRow = HitCircle(TableAddRowBtnPos(t));
+
+		// - 按钮只出现在第一行与第一列的表头单元格内：
+		//   第一列的表头格 -> 删除该行；第一行的表头格 -> 删除该列。
+		int delRow = -1;
+		int delCol = -1;
+
+		// 只剩 1 行 1 列时，左上角格同时命中「删列」与「删行」两套判定：
+		// 此时不论走哪条分支，结果都是「清空整表」，但为避免同时置位两个标志导致
+		// 判定顺序依赖，这里显式只按「删列」处理（TableRemoveCol 内含清表分支）。
+		if (t.Rows <= 1 && t.Cols <= 1)
+		{
+			if (HitCircle(TableDelBtnPos(t, 0, 0))) delCol = 0;
+		}
+		else
+		{
+			for (int c = 0; c < t.Cols; c++)
+			{
+				if (HitCircle(TableDelBtnPos(t, 0, c))) { delCol = c; break; }
+			}
+			for (int rr = 0; rr < t.Rows; rr++)
+			{
+				if (HitCircle(TableDelBtnPos(t, rr, 0))) { delRow = rr; break; }
+			}
+		}
+
+		bool curHit = addCol || addRow || delRow >= 0 || delCol >= 0;
+
+		// 安全区判定：把所有 + / - 按钮都纳入，防止手指接触误差导致穿透书写
+		bool area = curHit;
+
+		if (!area && (HitSafe(TableAddColBtnPos(t)) || HitSafe(TableAddRowBtnPos(t))))
+			area = true;
+
+		if (!area)
+		{
+			if (t.Rows <= 1 && t.Cols <= 1)
+			{
+				// 只剩 1 行 1 列时，左上角格的 - 同时代表「删行」与「删列」
+				if (HitSafe(TableDelBtnPos(t, 0, 0))) area = true;
+			}
+			else
+			{
+				for (int c = 0; c < t.Cols && !area; c++)
+				{
+					if (HitSafe(TableDelBtnPos(t, 0, c))) area = true;
+				}
+				for (int rr = 0; rr < t.Rows && !area; rr++)
+				{
+					if (HitSafe(TableDelBtnPos(t, rr, 0))) area = true;
+				}
+			}
+		}
+
+		// 安全区只需知道「是否落在某张表的按钮区」，可直接累积
+		if (area) inBtnArea = true;
+
+		// 精确命中只记录第一张命中的表，避免同一点位命中多表时操作对象不确定
+		if (hitIdx < 0 && curHit)
+		{
+			hitIdx = ti;
+			hoverAddCol = addCol;
+			hoverAddRow = addRow;
+			hoverDelRow = delRow;
+			hoverDelCol = delCol;
+		}
+	}
+
+	// 命中任何一张表的按钮，都把该表设为当前操作对象
+	if (hitIdx >= 0) TableActIdx = hitIdx;
+
+	// 兼容旧逻辑命名：单元格内部不再整体屏蔽，只有按钮安全区才屏蔽
+	bool inTableArea = inBtnArea;
+
+	// 按钮命中优先，其次才是表格外框的整体屏蔽
+	bool curHit = hitIdx >= 0;
+
+	// 粘滞标记：一次触控周期内只要命中过按钮（或按下点落在按钮安全区内），
+	// 就屏蔽书写直到抬手，防止按住按钮时坐标轻微漂移导致中途漏屏蔽、
+	// 进而把触控穿透到画布留下多余笔迹。
+	if (touching)
+	{
+		if (curHit || (pressed && inTableArea)) TableWasBtnHit = true;
+		if (pressed) TableAreaHold = inTableArea;
+	}
+	else
+	{
+		TableWasBtnHit = false;
+		TableAreaHold = false;
+	}
+
+	// 屏蔽范围 = 按钮命中 或 本次触控起始点落在按钮安全区内
+	TableBtnHit = TableWasBtnHit || TableAreaHold;
+
+	// 按钮按住期间抑制其他依赖本帧笔迹的逻辑（与思导图同语义）
+	if (pressed)
+	{
+		if (curHit) TableBtnHold = true;
+	}
+	else if (touching && curHit)
+	{
+		TableBtnHold = true;
+	}
+	if (!touching) TableBtnHold = false;
+
+	if (!pressed) return;
+
+	// ---------- 点击响应 ----------
+	// 没有命中任何表格按钮时无事可做
+	if (hitIdx < 0) return;
+
+	// 删除优先于新增：- 按钮位于单元格内部，某些布局下可能与 + 的命中圈靠近，
+	// 优先处理删除可以避免误加行列。
+	if (hoverDelCol >= 0)
+	{
+		TableRemoveCol(hitIdx, hoverDelCol);
+		return;
+	}
+
+	if (hoverDelRow >= 0)
+	{
+		TableRemoveRow(hitIdx, hoverDelRow);
+		return;
+	}
+
+	if (hoverAddCol)
+	{
+		TableAddCol(TableNodes[hitIdx]);
+		return;
+	}
+
+	if (hoverAddRow)
+	{
+		TableAddRow(TableNodes[hitIdx]);
+		return;
+	}
+}
+
+void WriteTable::Draw(RenderTarget& dest)
+{
+	// 未激活或当前页没有表格时无需绘制
+	if (!TableActived || TableNodes.empty()) return;
+
+	auto& pd = GetCurPage();
+	float scale = pd.Scale / 100.0f;
+	float camX = pd.CameraPos.x * scale;
+	float camY = pd.CameraPos.y * scale;
+
+	// 世界坐标 -> 屏幕坐标（与 Update 中的 SX/SY 完全一致）
+	auto SX = [&](int x) { return (int)(x * scale + camX); };
+	auto SY = [&](int y) { return (int)(y * scale + camY); };
+
+	int r = TableBtnR();
+	int in = TableBtnInset();
+
+	// 网格线宽：与思导图底线同量级，保证视觉统一
+	int lw = max(2, WindowSize.y / 260);
+
+	// 按钮：+ 加列（第一行末尾外侧）、+ 加行（第一列末尾外侧）
+	int arm = max(2, (int)(r * 0.5f));
+	int aw = max(2, lw);
+	int shownR = max(2, (int)(r * scale));
+
+	// 逐张表格绘制：多表格共存时每张表各自绘制网格与按钮
+	for (auto& t : TableNodes)
+	{
+		int right = TableRight(t);
+		int bottom = TableBottom(t);
+
+		// 网格线：先画全部横线，再画全部竖线。
+		// 使用浅灰色，保证在白色纸面上既可见又不抢手写内容的视觉重心。
+		XGraph::SetColor(Color(180, 180, 180));
+		XGraph::LineShape::SetLineWidth(lw);
+
+		// 逐行累加前缀坐标绘制横线：行高可被书写内容动态撑大，不能再按固定高度等距绘制
+		int lineY = t.Y;
+		for (int row = 0; row <= t.Rows; row++)
+		{
+			int y = SY(lineY);
+			XGraph::LineShape::Line((float)SX(t.X), (float)y, (float)SX(right), (float)y, dest);
+			lineY += TableRowSize(t, row);
+		}
+
+		// 同理逐列累加前缀坐标绘制竖线
+		int lineX = t.X;
+		for (int col = 0; col <= t.Cols; col++)
+		{
+			int x = SX(lineX);
+			XGraph::LineShape::Line((float)x, (float)SY(t.Y), (float)x, (float)SY(bottom), dest);
+			lineX += TableColSize(t, col);
+		}
+
+		// + 加列按钮
+		{
+			Vector2i c = TableAddColBtnPos(t);
+			int bx = SX(c.x);
+			int by = SY(c.y);
+
+			XGraph::SetFillColor(Color(240, 240, 240));
+			XGraph::CircleShape::FillCircle_WithoutBorder(bx, by, shownR, dest);
+
+			XGraph::SetColor(Color(30, 30, 30));
+			XGraph::LineShape::SetLineWidth(aw);
+			XGraph::LineShape::Line(bx - arm, by, bx + arm, by, dest);
+			XGraph::LineShape::Line(bx, by - arm, bx, by + arm, dest);
+		}
+
+		// + 加行按钮
+		{
+			Vector2i c = TableAddRowBtnPos(t);
+			int bx = SX(c.x);
+			int by = SY(c.y);
+
+			XGraph::SetFillColor(Color(240, 240, 240));
+			XGraph::CircleShape::FillCircle_WithoutBorder(bx, by, shownR, dest);
+
+			XGraph::SetColor(Color(30, 30, 30));
+			XGraph::LineShape::SetLineWidth(aw);
+			XGraph::LineShape::Line(bx - arm, by, bx + arm, by, dest);
+			XGraph::LineShape::Line(bx, by - arm, bx, by + arm, dest);
+		}
+
+		// 表头单元格右上角内部的 - 按钮：
+		// 第一行的每个格子 -> 删除该列；第一列的每个格子 -> 删除该行。
+		// 关键约束：**左上角单元格（row=0, col=0）必须无条件绘制 -**。
+		// 之前用「第一行 c==0 跳过 + 第一列 rr 从 1 开始」两段循环，
+		// 1x1 时两段都跳过左上角，表格就再也删不掉了；
+		// 现在改为：左上角单独无条件绘制一次，其余格子按表头分别在各自循环里绘制，
+		// 既保证任何行数/列数下左上角都有 -，也避免同一坐标重复画两个按钮。
+		//
+		// 统一的 - 按钮绘制辅助：红底 + 白色横杠，视觉风格与 + 按钮保持一致
+		auto DrawDelBtn = [&](int row, int col)
+			{
+				Vector2i p = TableDelBtnPos(t, row, col);
+				int bx = SX(p.x);
+				int by = SY(p.y);
+
+				XGraph::SetFillColor(Color(255, 100, 100));
+				XGraph::CircleShape::FillCircle_WithoutBorder(bx, by, shownR, dest);
+
+				XGraph::SetColor(Color(255, 255, 255));
+				XGraph::LineShape::SetLineWidth(aw);
+				XGraph::LineShape::Line(bx - arm, by, bx + arm, by, dest);
+			};
+
+		// ① 左上角单元格：始终绘制 -（不论行列数是多少，包括 1x1）
+		DrawDelBtn(0, 0);
+
+		// ② 第一行的其余格子（c >= 1）：删除对应列
+		for (int c = 1; c < t.Cols; c++)
+		{
+			DrawDelBtn(0, c);
+		}
+
+		// ③ 第一列的其余格子（rr >= 1）：删除对应行
+		for (int rr = 1; rr < t.Rows; rr++)
+		{
+			DrawDelBtn(rr, 0);
+		}
+	}
+}
+
+#pragma endregion
+
 //柳叶笔
 #pragma region MyRegion
 
@@ -2924,15 +4061,15 @@ void DrawLayer(RenderTarget& window)
 	//静态 Sprite 会一直持有已析构的旧纹理，导致绘制失效。
 	Sprite s(WriteLayer.getTexture());
 
-	//相机平移时历史纹理整体偏移，避免全量重算
-	if (!contentDirty && ScaleTemp == pd.Scale && CamPosTemp != pd.CameraPos)
-	{
-		float scale = pd.Scale / 100.0f;
-		const float dx = (pd.CameraPos.x - CamPosTemp.x) * scale;
-		const float dy = (pd.CameraPos.y - CamPosTemp.y) * scale;
-		s.move(sf::Vector2f(dx, dy));
-		CamPosTemp = pd.CameraPos;
-	}
+	////相机平移时历史纹理整体偏移，避免全量重算
+	//if (!contentDirty && ScaleTemp == pd.Scale && CamPosTemp != pd.CameraPos)
+	//{
+	//	float scale = pd.Scale / 100.0f;
+	//	const float dx = (pd.CameraPos.x - CamPosTemp.x) * scale;
+	//	const float dy = (pd.CameraPos.y - CamPosTemp.y) * scale;
+	//	s.move(sf::Vector2f(dx, dy));
+	//	CamPosTemp = pd.CameraPos;
+	//}
 
 	window.draw(s);
 }
@@ -3027,7 +4164,7 @@ void DrawNowLayer(RenderTarget& window)
 			}
 			else
 			{
-				if (data.w < Tool::PenSize / 3) data.w += 0.2;
+				if (data.w < Tool::PenSize / 3) data.w += 0.1;
 			}
 				
 		}
@@ -3156,7 +4293,7 @@ void DrawImageLayer(RenWin& window)
 
 bool StraightenWriteData(
 	vector<WriteData>& WriteDataTemp,
-	float tolerance = 18.0f * ScreenScale,
+	float tolerance = 14.0f * ScreenScale,
 	float minLength = 200.f * 100.0 / GetCurPage().Scale)
 {
 	size_t N = WriteDataTemp.size();
@@ -3586,7 +4723,10 @@ void WriteSub(RenWin& window)
 		// 否则点击按钮会穿透到底层画布，在按钮位置留下多余笔画，
 		// 该短笔画还会让所属节点的底线被误判为「有内容」而错误延展。
 		// 命中范围同时包含 + / 调色 / 删除(-) 三个按钮。
-		if (MindMap::IsBtnHit())
+		// 表格的 + / - 按钮与思维导图共用同一套「按钮命中即屏蔽」策略：
+		// 若不在此拦截，点击表格按钮会穿透到画布，在按钮位置留下短笔画，
+		// 该笔画还会被后续「删除某行/某列时连带删除笔迹」的逻辑误处理。
+		if (MindMap::IsBtnHit() || WriteTable::IsBtnHit())
 		{
 			// 关键：清空本帧已累积的按钮触控笔迹，防止它被提交成真实笔画
 			WriteDataTemp.clear();
@@ -3846,11 +4986,13 @@ void MoveCamera()
 	{
 		GetCurPage().CameraPos.x = ResetPos.x.value;
 		FlushWriteLayer = true;
+		FlushImageLayer = true;
 	}
 	if (ResetPos.y.IsAnimation())
 	{
 		GetCurPage().CameraPos.y = ResetPos.y.value;
 		FlushWriteLayer = true;
+		FlushImageLayer = true;
 	}
 
 	static const int CameraTo = 1;
@@ -3904,6 +5046,7 @@ void MoveCamera()
 						pd.CameraPos.y += movey * 100 / pd.Scale;
 
 						FlushWriteLayer = true;
+						FlushImageLayer = true;
 					}
 					temp_mousep.x = x;
 					temp_mousep.y = y;
@@ -3931,10 +5074,12 @@ void MoveCamera()
 	{
 		if (wheel != 0)
 		{
+			WriteStopTime = 15;
+
 			POINT mp = { x,y };
 
 			int prevScale = GetCurPage().Scale;
-			int delta = wheel / 100 / ScreenScale;
+			int delta = wheel / 100;
 
 			MoveSleepTime = 10;
 
@@ -3971,51 +5116,9 @@ void MoveCamera()
 				}
 
 				FlushWriteLayer = true;
+				FlushImageLayer = true;
 			}
 		}
-	}
-
-	if (WriteCamera::EnableWriteCamera)
-	{
-		// 与 WriteCamera::Draw 保持一致：画面中心在屏幕上的位置为
-		// (CameraPos + 窗口半宽) * Scale；且画面被旋转 -90°，
-		// 因此屏幕上的水平尺寸对应采集帧的高、垂直尺寸对应采集帧的宽。
-		float CameraScale = GetCurPage().Scale / 100.0f;
-		if (CameraScale < 0.01f) CameraScale = 0.01f; // 防止极端缩放导致除零
-
-		float halfWinX = WindowSize.x / 2.0f;
-		float halfWinY = WindowSize.y / 2.0f;
-
-		// 画面在屏幕上的实际尺寸（旋转 -90° 后宽高互换）
-		float camScreenW;
-		float camScreenH;
-		
-
-		if(CameraManager::Rotation.value == -90 || CameraManager::Rotation.value == -270)
-		{
-			camScreenW = CameraManager::GetH() * CameraScale;
-			camScreenH = CameraManager::GetW() * CameraScale;
-		}
-		else
-		{
-			camScreenW = CameraManager::GetW() * CameraScale;
-			camScreenH = CameraManager::GetH() * CameraScale;
-		}
-
-		// 保证最大位移时至少有 0.1 比例的尺寸仍留在窗口内：
-		// 画面中心越过窗口边缘 0.4 * 屏幕尺寸时，窗口内恰好只剩 0.1。
-		float cxMin = -0.4f * camScreenW;
-		float cxMax = WindowSize.x + 0.4f * camScreenW;
-		float cyMin = -0.4f * camScreenH;
-		float cyMax = WindowSize.y + 0.4f * camScreenH;
-
-		// 由屏幕中心反推 CameraPos：CameraPos = 屏幕中心 / Scale - 窗口半宽
-		Clamp(GetCurPage().CameraPos.x,
-			(int)(cxMin / CameraScale - halfWinX),
-			(int)(cxMax / CameraScale - halfWinX));
-		Clamp(GetCurPage().CameraPos.y,
-			(int)(cyMin / CameraScale - halfWinY),
-			(int)(cyMax / CameraScale - halfWinY));
 	}
 }
 
@@ -4072,6 +5175,7 @@ void Write::Show(RenWin& window)
 		ImageLayer.clear(Color::Transparent);
 
 		FlushWriteLayer = true;
+		FlushImageLayer = true;
 	}
 
 	//绘制展台
@@ -4119,6 +5223,12 @@ void Write::Show(RenWin& window)
 
 	//绘制思维导图（底线、连接线、+ 按钮）
 	MindMap::Draw(window);
+
+	//更新表格（+ / - 按钮命中、增删行列、连带删除笔迹）
+	WriteTable::Update();
+
+	//绘制表格（底色、网格线、+ / - 按钮）
+	WriteTable::Draw(window);
 
 	//绘制对齐线
 	DrawAdjustLine(window);
@@ -4301,6 +5411,57 @@ void Write::GoToPage(int page)
 	FlushImageLayer = FlushWriteLayer = true;
 }
 
+//把内存中的图片字节解码后插入当前页（供手机上传使用，不落盘）
+bool Write::AddImageFromMemory(const void* data, size_t size)
+{
+	if (!data || size == 0) return false;
+
+	// 手机传来的字节流直接解码成纹理，避免产生临时文件
+	IMAGE img;
+	if (!img.texture.loadFromMemory(data, std::streamsize(size))) return false;
+
+	Vector2u texSize = img.texture.getSize();
+	if (texSize.x == 0 || texSize.y == 0) return false;
+
+	img.w = int(texSize.x);
+	img.h = int(texSize.y);
+
+	PageDataS& page = GetCurPage();
+	page.Images.emplace_back();
+
+	ImageStruct& target = page.Images.back();
+	target.path.clear();
+	target.img = img;
+	target.rote = 0;
+
+	target.h = img.h;
+	target.w = img.w;
+
+	// 图片过大时按窗口比例缩放，保证初始可见
+	if (target.h > WindowSize.y * 0.7)
+	{
+		target.w = img.w * WindowSize.y * 0.7 / target.h;
+		target.h = WindowSize.y * 0.7;
+	}
+	if (target.w > WindowSize.x * 0.7)
+	{
+		target.h = target.h * WindowSize.x * 0.7 / target.w;
+		target.w = WindowSize.x * 0.7;
+	}
+
+	// 初始位置固定在窗口中心：绘制时屏幕坐标 = pos * scale + CameraPos * scale，
+	// 因此反解出 pos = 窗口中心 / scale - CameraPos。
+	float scale = page.Scale / 100.0f;
+	if (scale <= 0) scale = 1.0f;
+
+	target.pos.x = (int)(WindowSize.x / 2 / scale) - page.CameraPos.x;
+	target.pos.y = (int)(WindowSize.y / 2 / scale) - page.CameraPos.y;
+
+	FlushImageLayer = true;
+
+	return true;
+}
+
 //渲染指定页缩略图到纹理（不改变当前页）
 void Write::GetPageThumbnail(int pageIndex, RenderTexture& rt)
 {
@@ -4447,6 +5608,9 @@ void Write::EraseAll()
 	// 清屏同步清除思维导图：重置为未激活状态，
 	// 避免清屏后仍残留思维导图（与"清屏"语义保持一致）。
 	MindMap::Clear();
+
+	// 表格同理：清屏后不应残留空表格的白色底纹与网格线
+	WriteTable::Clear();
 
 	FlushWriteLayer = true;
 }
@@ -5154,7 +6318,10 @@ static void MindMapDrawToExport(RenderTarget& rt, float scale, float camX, float
 
 // 计算某一页内容在世界坐标下的包围盒；返回 false 表示该页无任何内容
 // minX/minY/maxX/maxY 为输出参数，单位为世界坐标
-static bool ComputePageBounds(const PageDataS& pd, bool includeMindMap,
+// includeMindMap / includeTable：思维导图与表格都是「全局的单份数据」，
+// 只属于当前正在编辑的那一页，因此必须由调用方显式声明本页是否把二者算进来，
+// 否则同一份表格/导图会被算进每一页的包围盒，导致其它页画出大片空白区域。
+static bool ComputePageBounds(const PageDataS& pd, bool includeMindMap, bool includeTable,
 	float& minX, float& minY, float& maxX, float& maxY)
 {
 	minX = FLT_MAX; minY = FLT_MAX;
@@ -5182,7 +6349,10 @@ static bool ComputePageBounds(const PageDataS& pd, bool includeMindMap,
 		}
 	}
 
-	// 图片：按对角线外扩（覆盖任意旋转角）
+	// 图片/表格截图层：图片以 pos 为中心绘制（旋转以中心为轴），
+	// 旋转任意角度后最远点距中心为对角线半径，因此按对角线外扩可覆盖所有旋转角。
+	// 表格的单元格内容虽然单独记录在 TableNodes 中，但渲染时同样以图片形式贴出，
+	// 这里一并纳入包围盒，避免表格被裁切。
 	for (size_t i = 0; i < pd.Images.size(); i++)
 	{
 		const ImageStruct& img = pd.Images[i];
@@ -5194,20 +6364,90 @@ static bool ComputePageBounds(const PageDataS& pd, bool includeMindMap,
 		maxY = max(maxY, img.pos.y + diag);
 	}
 
-	// 思维导图节点
+	// 表格层：表格不是图片，它是按 TableNode 的行列尺寸实时绘制出来的网格线，
+	// 因此必须在这里按 左上角 + 各行列累计尺寸 精确外扩（不能依赖 pd.Images，
+	// 表格根本没有截图进 Images）。同时还要把 + / - 操作按钮的外沿一并算进去，
+	// 因为这些按钮确实会被绘制出来（见 WriteTable::Draw），漏算就会被裁掉。
+	// 注意：网格线有宽度，单元格文字也可能贴近边界，所以统一再加一道线宽余量。
+	if (includeTable && TableActived && !TableNodes.empty())
+	{
+		// 与 WriteTable::Draw 完全相同的线宽口径，保证包围盒与绘制结果对齐
+		float lwHalf = (float)max(2, WindowSize.y / 260) * 0.5f;
+		// 按钮视觉半径（世界坐标），按钮圆心可能落在表格外沿之外
+		float btnR = (float)TableBtnR() + 1.0f;
+		// 边框/文字溢出余量：按默认行高的一小部分估算
+		float padT = max(2.0f, (float)TableRowH() * 0.12f) + lwHalf;
+
+		for (size_t i = 0; i < TableNodes.size(); ++i)
+		{
+			// 必须是可写引用：TableRight / TableBottom / Table*BtnPos 内部都会
+			// 调用 TableEnsureSize 修正未补齐的 RowHeights/ColWidths，
+			// 用 const 引用会直接编译失败（C2664）。
+			TableNode& t = TableNodes[i];
+			if (t.Rows <= 0 || t.Cols <= 0) continue;
+
+			// TableRight / TableBottom 内部已按行列累计真实尺寸求和，
+			// 直接复用可避免包围盒与绘制各写一套累加逻辑而产生偏差。
+			float right = (float)TableRight(t);
+			float bottom = (float)TableBottom(t);
+
+			float l = (float)t.X - padT;
+			float tp = (float)t.Y - padT;
+			float r = right + padT;
+			float b = bottom + padT;
+
+			// 三个操作按钮（加列、加行、删除）圆心均在表格外侧或表头格内，
+			// 逐个并入包围盒，保证按钮圆完整可见
+			Vector2i btnPos[3] = {
+				TableAddColBtnPos(t),   // + 加列
+				TableAddRowBtnPos(t),   // + 加行
+				TableDelBtnPos(t, 0, 0) // 左上角删除按钮（所有表格都存在）
+			};
+			for (int bi = 0; bi < 3; ++bi)
+			{
+				l = min(l, (float)btnPos[bi].x - btnR);
+				r = max(r, (float)btnPos[bi].x + btnR);
+				tp = min(tp, (float)btnPos[bi].y - btnR);
+				b = max(b, (float)btnPos[bi].y + btnR);
+			}
+
+			minX = min(minX, l);
+			maxX = max(maxX, r);
+			minY = min(minY, tp);
+			maxY = max(maxY, b);
+		}
+	}
+
+	// 思维导图层：节点除了正文区域，还会绘制
+	// ① 节点底线（向右延展 lineEase + 按钮区宽度）
+	// ② 父子连接曲线（从父节点延展底线末端，向下连到子节点上方 kDetach 处）
+	// 因此包围盒必须同时覆盖「延展底线右端」和「向下延伸的连线高度」，
+	// 否则最后一个子节点下方的连线、以及最右节点的延展底线会被裁掉。
 	if (includeMindMap && MindMapActived && !MindMapNodes.empty())
 	{
 		int mmGap = MindMapLineGap();
+		// 连线从父节点底线下方 gap 处再向下延伸约 detach 距离才接上子节点，
+		// 底边额外补 gap + detach，保证连线最低点落在画布内。
+		float linkBottom = (float)(mmGap + MindMapLinkDetach());
+		// 连接线自身有线宽，按线宽的一半再外扩，避免最外侧连线被切边
+		float linkHalfW = max(1.0f, (float)max(2, WindowSize.y / 260) * 0.5f);
+
 		for (auto& n : MindMapNodes)
 		{
-			float l = (float)n.x;
+			// 文本区左边界：文字从 n.x 起绘制，但节点可能有缩进/项目符号，
+			// 左侧按半个行高外扩，防止首字符被切。
+			float l = (float)n.x - (float)n.lineH * 0.25f;
+			// 右侧：延展底线终点（lineEase + 按钮区宽度）即最右绘制位置
 			float r = (float)(n.x + (int)n.lineEase.value + MindMapBtnZoneW());
-			float t = (float)(n.y - n.lineH / 2);
-			float b = (float)(n.y + n.lineH + mmGap);
-			minX = min(minX, l);
-			maxX = max(maxX, r);
-			minY = min(minY, t);
-			maxY = max(maxY, b);
+			// 顶部：文字纵向以 n.y 为行首，向上留半个行高覆盖字形上伸部分
+			float t = (float)n.y - (float)n.lineH * 0.5f;
+			// 底部：节点底线在 n.y + lineH + gap，连线再向下延伸 linkBottom
+			float b = (float)(n.y + n.lineH + mmGap) + linkBottom;
+
+			minX = min(minX, l - linkHalfW);
+			maxX = max(maxX, r + linkHalfW);
+			minY = min(minY, t - linkHalfW);
+			maxY = max(maxY, b + linkHalfW);
 		}
 	}
 
@@ -5232,12 +6472,12 @@ struct ExportLayout
 // 依据内容包围盒计算导出布局：长边固定 4K，短边按比例，四周保留空隙
 // pageScale：页面自身缩放系数（Write::Scale / 100），内容会按此比例放大/缩小，
 // 必须一并纳入画布尺寸计算，否则放大后的内容会超出画布被裁掉。
-static ExportLayout ComputeExportLayout(const PageDataS& pd, bool includeMindMap, float pageScale)
+static ExportLayout ComputeExportLayout(const PageDataS& pd, bool includeMindMap, bool includeTable, float pageScale)
 {
 	ExportLayout out;
 
 	float minX = 0.f, minY = 0.f, maxX = 0.f, maxY = 0.f;
-	bool hasContent = ComputePageBounds(pd, includeMindMap, minX, minY, maxX, maxY);
+	bool hasContent = ComputePageBounds(pd, includeMindMap, includeTable, minX, minY, maxX, maxY);
 	if (!hasContent)
 	{
 		// 无内容时退化为整屏范围，保证仍能输出一张空白 4K 图
@@ -5290,20 +6530,11 @@ static ExportLayout ComputeExportLayout(const PageDataS& pd, bool includeMindMap
 	return out;
 }
 
-// 判断某页是否存在需要导出的实际内容（笔画或图片）
-static bool PageHasContent(const PageDataS& pd)
-{
-	if (!pd.Images.empty()) return true;
-	for (size_t i = 0; i < pd.Data.size(); ++i)
-	{
-		if (!pd.Data[i].empty()) return true;
-	}
-	return false;
-}
-
 // 把指定板书页完整渲染到最终输出纹理（尺寸由内容包围盒反推，长边 4K）
+// drawTable 为 true 时把表格（网格线 + 操作按钮）一并绘制出来。
+// 表格与思维导图一样是全局单份数据，只归属当前页，故由此开关显式控制。
 // 返回 false 表示纹理创建失败
-static bool RenderPageToTexture(const PageDataS& pd, bool drawMindMap, Texture& outTex)
+static bool RenderPageToTexture(const PageDataS& pd, bool drawMindMap, bool drawTable, Texture& outTex)
 {
 	// 页面自身缩放（用户缩放板书内容时生效）；必须与布局共用同一系数，
 	// 否则画布按未缩放内容开尺寸，放大后的笔迹会溢出画布被裁掉（保存不全）。
@@ -5312,7 +6543,7 @@ static bool RenderPageToTexture(const PageDataS& pd, bool drawMindMap, Texture& 
 
 	// 先依据内容计算布局（长边固定 4K，四周留白，短边自适应）
 	// 注意：把 pageScale 一并传入，使画布尺寸按「缩放后的实际占用」计算
-	ExportLayout layout = ComputeExportLayout(pd, drawMindMap, pageScale);
+	ExportLayout layout = ComputeExportLayout(pd, drawMindMap, drawTable, pageScale);
 
 	float eScale = layout.ssScale * pageScale;
 	float ePadX = layout.ssPad;	// 超采样画布上与最终画布等价的世界边距
@@ -5321,7 +6552,7 @@ static bool RenderPageToTexture(const PageDataS& pd, bool drawMindMap, Texture& 
 	// 世界坐标 -> 超采样画布坐标；先按包围盒左下角对齐（-minX/-minY），
 	// 再加边距，保证所有内容（含移动过的笔迹）完整落在画布内
 	float minX = 0.f, minY = 0.f, maxX = 0.f, maxY = 0.f;
-	if (!ComputePageBounds(pd, drawMindMap, minX, minY, maxX, maxY))
+	if (!ComputePageBounds(pd, drawMindMap, drawTable, minX, minY, maxX, maxY))
 	{
 		minX = minY = 0.f;
 		maxX = WindowSize.x;
@@ -5380,6 +6611,52 @@ static bool RenderPageToTexture(const PageDataS& pd, bool drawMindMap, Texture& 
 	if (drawMindMap)
 		MindMapDrawToExport(rt, eScale, -minX, -minY, ePadX, ePadY);
 
+	// 叠加表格：表格不是图片，必须在这里按导出坐标重新绘制网格线与操作按钮。
+	// 绘制口径与 WriteTable::Draw 完全一致（同样的行列累加、同样的线宽），
+	// 只是把「世界坐标 -> 屏幕坐标」的映射换成「世界坐标 -> 超采样画布坐标」。
+	if (drawTable && TableActived && !TableNodes.empty())
+	{
+		// 线宽按 eScale 放大，保证超采样与最终降采样后视觉线宽与屏幕一致
+		float lw = max(1.0f, (float)max(2, WindowSize.y / 260) * eScale);
+		float btnR = (float)TableBtnR() * eScale;       // 按钮半径同步缩放
+		float arm = max(1.0f, btnR * 0.5f);             // 按钮内「+ / -」笔画半长
+		float btnLw = max(1.0f, lw);                    // 按钮内笔画线宽
+
+		for (size_t ti = 0; ti < TableNodes.size(); ++ti)
+		{
+			// 绘制过程会调用 TableEnsureSize 修正行列数组，故需非 const 引用
+			TableNode& t = TableNodes[ti];
+			if (t.Rows <= 0 || t.Cols <= 0) continue;
+
+			// 网格线：与屏幕绘制同样先横后竖，颜色保持浅灰
+			XGraph::SetColor(Color(180, 180, 180));
+			XGraph::LineShape::SetLineWidth(lw);
+
+			// 横线：逐行累加前缀坐标（行高可被书写内容撑大，不能等距）
+			int lineY = t.Y;
+			for (int row = 0; row <= t.Rows; ++row)
+			{
+				float y = W2E_Y((float)lineY);
+				XGraph::LineShape::Line(W2E_X((float)t.X), y, W2E_X((float)TableRight(t)), y, rt);
+				lineY += TableRowSize(t, row);
+			}
+
+			// 竖线：同理逐列累加前缀坐标
+			int lineX = t.X;
+			for (int col = 0; col <= t.Cols; ++col)
+			{
+				float x = W2E_X((float)lineX);
+				XGraph::LineShape::Line(x, W2E_Y((float)t.Y), x, W2E_Y((float)TableBottom(t)), rt);
+				lineX += TableColSize(t, col);
+			}
+
+			// 操作按钮：导出的是「成品图」，按钮属于编辑期控件，不应出现在保存结果里，
+			// 因此这里只画表格网格，不画 + / - 按钮（包围盒已为它们预留空间，
+			// 多出的空白只会让边距略宽，不会裁切任何内容）。
+			(void)btnR; (void)arm; (void)btnLw;
+		}
+	}
+
 	rt.display();
 
 	// 降采样：把超采样纹理缩放到最终像素尺寸，消除残余锯齿
@@ -5401,35 +6678,111 @@ static bool RenderPageToTexture(const PageDataS& pd, bool drawMindMap, Texture& 
 	return true;
 }
 
-// 把当前有内容的板书页导出为图片文件
+// 待导出的单页描述：把页面数据与「该页是否绘制思维导图 / 表格」绑定在一起，
+// 避免渲染阶段再去猜测二者的归属，导致内容被漏画或误画。
+// 思维导图与表格都是全局单份数据，只属于当前正在编辑的那一页。
+struct ExportPage
+{
+	const PageDataS* pd = nullptr;	// 页面数据（普通页或展台页）
+	bool drawMindMap = false;		// 本页是否需要叠加思维导图
+	bool drawTable = false;			// 本页是否需要叠加表格网格
+};
+
+// 判断某页是否含有可导出的图片内容。
+// 注意：表格不在此判定范围内——表格是 TableNodes 实时绘制的网格，
+// 并不会写进 Images；它的存在性由调用方通过 ExportPage::drawTable 显式声明。
+// 这里以「带有效纹理且尺寸为正」作为有效图片的判定依据，
+// 用于排除用户删除图片后残留的空壳项。
+static bool PageHasDrawableImage(const PageDataS& pd)
+{
+	for (size_t i = 0; i < pd.Images.size(); ++i)
+	{
+		const ImageStruct& img = pd.Images[i];
+		if (img.w > 0 && img.h > 0 && img.img.w > 0 && img.img.h > 0)
+			return true;
+	}
+	return false;
+}
+
+// 判断某页是否存在可导出的笔迹
+static bool PageHasStroke(const PageDataS& pd)
+{
+	for (size_t i = 0; i < pd.Data.size(); ++i)
+	{
+		if (!pd.Data[i].empty()) return true;
+	}
+	return false;
+}
+
+// 把当前所有有内容的板书页导出为图片文件（图片、表格、思维导图、笔迹一并导出）
+// dir: 输出目录；ext: 文件扩展名（png 等）
+// 返回值：成功写出的图片数量，0 表示没有任何页面可导出或全部写出失败
 static int SaveAsImage(const wstring& dir, const wstring& ext)
 {
-	vector<const PageDataS*> pages;
-	vector<bool> pageIsCurrent;
+	// 思维导图只有一份全局数据，它始终跟随「当前正在编辑的那一页」：
+	// 因此只有当前页才允许叠加思维导图，其余页导出纯图片/表格/笔迹，
+	// 否则同一份导图会被重复画到每一页上。
+	const bool mindMapVisible = MindMapActived && !MindMapNodes.empty();
+	// 表格同理：TableNodes 也是全局单份数据，只属于当前页。
+	const bool tableVisible = TableActived && !TableNodes.empty();
 
-	for (size_t i = 0; i < PageData.size(); i++)
+	vector<ExportPage> pages;
+
+	// ① 普通板书页：仅在非展台模式下，Write::Page 指向的是普通页
+	for (size_t i = 0; i < PageData.size(); ++i)
 	{
-		if (!PageHasContent(PageData[i])) continue;
-		pages.push_back(&PageData[i]);
-		pageIsCurrent.push_back(!WriteCamera::EnableWriteCamera && (int)i == Write::Page);
+		const PageDataS& pd = PageData[i];
+		bool isCurrent = (!WriteCamera::EnableWriteCamera && (int)i == Write::Page);
+		bool hasMindMap = mindMapVisible && isCurrent;
+		bool hasTable = tableVisible && isCurrent;
+
+		// 图片、笔迹、思维导图、表格任意一类存在即可导出该页
+		// （表格是实时绘制的网格，不体现在 pd.Images 里，必须单独判断）
+		if (!PageHasDrawableImage(pd) && !PageHasStroke(pd) && !hasMindMap && !hasTable)
+			continue;
+
+		pages.push_back(ExportPage{ &pd, hasMindMap, hasTable });
 	}
-	for (size_t i = 0; i < CameraPageData.size(); i++)
+
+	// ② 展台专用页：仅在展台模式下，Write::Page 指向的是展台页
+	for (size_t i = 0; i < CameraPageData.size(); ++i)
 	{
-		if (!PageHasContent(CameraPageData[i])) continue;
-		pages.push_back(&CameraPageData[i]);
-		pageIsCurrent.push_back(WriteCamera::EnableWriteCamera && (int)i == Write::Page);
+		const PageDataS& pd = CameraPageData[i];
+		bool isCurrent = (WriteCamera::EnableWriteCamera && (int)i == Write::Page);
+		bool hasMindMap = mindMapVisible && isCurrent;
+		bool hasTable = tableVisible && isCurrent;
+
+		if (!PageHasDrawableImage(pd) && !PageHasStroke(pd) && !hasMindMap && !hasTable)
+			continue;
+
+		pages.push_back(ExportPage{ &pd, hasMindMap, hasTable });
 	}
+
+	// 页面上什么都没画时直接返回 0，让调用方弹出「导出失败」，
+	// 而不是生成一堆全黑空白图伪装成成功。
+	if (pages.empty()) return 0;
 
 	int saved = 0;
-	for (size_t i = 0; i < pages.size(); i++)
+	for (size_t i = 0; i < pages.size(); ++i)
 	{
+		const PageDataS* pd = pages[i].pd;
+		if (!pd) continue;
+
 		// 纹理在渲染函数内部按内容尺寸创建，尺寸不再绑定窗口大小
 		Texture tex;
-		if (!RenderPageToTexture(*pages[i], pageIsCurrent[i], tex))
+		if (!RenderPageToTexture(*pd, pages[i].drawMindMap, pages[i].drawTable, tex))
+			continue;
+
+		// 输出到纹理后确认尺寸有效，避免写出 0 字节或损坏的图片文件
+		Vector2u texSize = tex.getSize();
+		if (texSize.x == 0 || texSize.y == 0)
 			continue;
 
 		wstring outPath = dir + L"\\" + to_wstring(i + 1) + L"." + ext;
 		sf::Image img = tex.copyToImage();
+		if (img.getSize().x == 0 || img.getSize().y == 0)
+			continue;
+
 		if (img.saveToFile(outPath))
 			saved++;
 	}
@@ -5866,7 +7219,6 @@ void WriteCamera::ManageShareCamera(RenWin& window)
 }
 #pragma endregion
 
-
 //展台
 #pragma region MyRegion
 
@@ -6142,6 +7494,251 @@ int WriteCamera::GetRote(int page)
 	if (page < 1) page = 1;
 
 	return CameraPageData[page].Images[0].rote;
+}
+
+#pragma endregion
+
+//手机图片上传
+#pragma region MyRegion
+
+// 手机图片上传服务实例：整个板书模块共用一份，避免重复占用端口
+ShareImage ShareImageA;
+
+// 本次共享期间已接收的手机图片总数（0 表示尚未收到图片）
+int ShareWriteImage::ShareImageRecvTotal = 0;
+
+// 最近一次接收图片的序号，从 1 开始，与 ShareImageRecvTotal 组成进度显示
+int ShareWriteImage::ShareImageRecvIndex = 0;
+
+// showPublic 为 true 时展示公网地址二维码，否则展示局域网地址二维码。
+// 两种模式复用同一窗口布局，仅在提示文案与错误判断上有差异。
+void ShowShareImageQR(IMAGE& img, RenWin& window, ShareImage& Share, bool showPublic)
+{
+	RenWin QRWindow;
+	XWindow::CreateGraphWindow(QRWindow, L"手机传图", -1, -1, WindowSize.x / 2, WindowSize.y / 2, Style::Titlebar | Style::Close);
+	XWindow::DWM::SetWindowTitleBarColor(QRWindow, XWindow::GetBackGroundColor());
+	XWindow::DWM::SetWindowBorderColor(QRWindow, User::MainColor);
+	XWindow::RemoveWindowStyle(QRWindow, WS_MAXIMIZEBOX);
+	XWindow::RemoveWindowStyle(QRWindow, WS_MINIMIZEBOX);
+
+	//置顶窗口
+	SetWindowLongPtrW(QRWindow.getNativeHandle(), GWL_EXSTYLE, WS_EX_TOPMOST);
+	SetWindowPos(QRWindow.getNativeHandle(), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
+	static float Scale = WindowSize.x / 8 / (float)img.w;
+
+	while (XMsg::IsOpen(QRWindow))
+	{
+		XWindow::DelayFps(QRWindow);
+
+		XText::SetFontAdjust(ADJUST_LEFT, ADJUST_TOP);
+		XText::SetFontConfig(Color::White, FONTSIZE);
+		static int tipx = WindowSize.x / 100, tipy = WindowSize.x / 100;
+
+		// 公网模式下手机可能不在同一局域网，提示语与地址都要区分开
+		XText::Xyprintf(tipx, tipy,
+			showPublic
+				? L"使用手机扫描此QR码，用移动网络也可从相册上传图片到板书。"
+				: L"使用手机扫描此QR码，即可从相册选择图片上传到板书。",
+			QRWindow);
+
+		XText::SetFontConfig(Color(255, 100, 100), FONTSIZE);
+		XText::Xyprintf(tipx, tipy * 2,
+			showPublic
+				? L"注意：不要在传输过程中关闭此窗口，否则链接将会失效。"
+				: L"注意：关闭此页面，链接将会失效。",
+			QRWindow);
+
+		XImage::PutScaleImage(img, WindowSize.x / 4, WindowSize.y / 4, Scale, Scale, QRWindow, 0.5, 0.5);
+
+		XGraph::SetColor(User::MainColor);
+		static int w = WindowSize.x / 8, h = WindowSize.x / 8;
+		static int lw = WindowSize.x / 200;
+		static int r = WindowSize.x / 200;
+		XGraph::LineShape::SetLineWidth(lw);
+		XGraph::RectangleShape::RoundRect(WindowSize.x / 4 - w / 2, WindowSize.y / 4 - h / 2, w, h, r, QRWindow);
+
+		//显示进度
+		XText::SetFontConfig(Color::White, FONTSIZE);
+		XText::SetFontAdjust(ADJUST_CENTER, ADJUST_TOP);
+		XText::Xyprintf(WindowSize.x / 4, WindowSize.y * 0.4,
+			L"接收到图片：" + to_wstring(Share.getReceivedImageCount()), QRWindow);
+
+		// 公网模式额外要求隧道仍然存活，隧道断开则链接立即失效
+		bool alive = showPublic ? (Share.isRunning() && Share.isTunnelRunning())
+			: Share.isRunning();
+
+		if (!alive)
+		{
+			Message::ShowMessage("网络配置错误。", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
+			XWindow::SetBackGroundColor(User::BackColor);
+
+			break;
+		}
+	}
+
+	XMsg::ResetCloseMsg();
+	XMsg::ClearMsg();
+	XMsg::UpdateMsg(window);
+}
+
+void ShareWriteImage::ManageShareImage(RenWin& window)
+{
+	// 端口从 9100 起找空闲端口，避免与投屏服务（9000）冲突
+	ShareImageA.Init(ShareImage::findAvailablePort(9100));
+
+	if (!ShareImageA.start())
+	{
+		BottomMessage::AddMessage(302, L"无法打开手机传图", BottomMessageType_ERROR);
+		RightMessage::ShowMessage(L"无法打开手机传图", L"手机传图", RightMessageType_ERROR, true);
+		return;
+	}
+
+	ShellExecuteW(NULL, L"open", L"MiuBarrdLoader.exe", NULL, NULL, false);
+
+	// 优先尝试内网穿透：手机与 PC 不在同一局域网时仍可上传。
+	// 隧道依赖 Net/cloudflared.exe，缺失或超时会自动退回局域网二维码。
+	bool usePublic = ShareImageA.startTunnel();
+
+	IMAGE QR;
+	QR.texture = usePublic ? ShareImageA.getPublicQRTexture(8, 1)
+		: ShareImageA.getQRTexture(8, 1);
+	Vector2u Size = QR.texture.getSize();
+	QR.w = int(Size.x);
+	QR.h = int(Size.y);
+
+	if (QR.w > 0 && QR.h > 0)
+	{
+		HWND hWnd = FindWindowW(NULL, L"MiuBarrdLoader");
+		if (IsWindow(hWnd))
+		{
+			// 发送关闭消息
+			SendMessageW(hWnd, WM_CLOSE, 0, 0);
+		}
+
+		ShowShareImageQR(QR, window, ShareImageA, usePublic);
+	}
+	else
+	{
+		Message::ShowMessage("转换QR码失败", "保存失败", ICOTYPE_ERROR, { "确定" }, 3, L"MiuBarrd");
+		XWindow::SetBackGroundColor(User::BackColor);
+	}
+
+	ShellExecuteW(NULL, L"open", L"MiuBarrdLoader.exe", NULL, NULL, false);
+
+	// 关闭共享时先停隧道再停 HTTP 服务，避免转发指向已关闭的本地端口
+	ShareImageA.requestExitCamera();
+	ShareImageA.stopTunnel();
+	ShareImageA.stop();
+
+	HWND hWnd = FindWindowW(NULL, L"MiuBarrdLoader");
+	if (IsWindow(hWnd))
+	{
+		// 发送关闭消息
+		SendMessageW(hWnd, WM_CLOSE, 0, 0);
+	}
+
+	PollShareImage();
+
+	if (WriteCamera::EnableShareCamera) Tool::ShowPhotoWindow();
+}
+
+void ShareWriteImage::PollShareImage()
+{
+	// 关共享时由 ManageShareImage 末尾统一调用一次：此时服务已停止，
+	// 把队列里所有残留图片一次性推入页面，避免已上传的图片丢失。
+	// 本函数不再作为逐帧轮询使用，因此不设数量上限。
+	if (!ShareImageA.hasUploadedImage())
+	{
+		return;
+	}
+
+	// 单次加锁整体换出队列，避免「边取边被服务器线程入队」导致的数量抖动
+	std::vector<SharedImage> batch = ShareImageA.popAllUploadedImages();
+	if (batch.empty()) return;
+
+	for (SharedImage& data : batch)
+	{
+		if (!data.valid || data.data.empty()) continue;
+
+		// 手机传来的字节流直接解码成纹理，不落盘，避免产生临时文件
+		IMAGE img;
+		if (!img.texture.loadFromMemory(data.data.data(), data.data.size())) continue;
+
+		Vector2u Size = img.texture.getSize();
+		if (Size.x == 0 || Size.y == 0) continue;
+
+		img.w = int(Size.x);
+		img.h = int(Size.y);
+
+		// 目标数据容器必须与当前视图一致：展台模式下页面数据走 CameraPageData，
+		// 普通板书页走 PageData，否则图片会写进当前不显示的那份数据里。
+		//
+		// 注意：不能直接 Write::MakeNewPage() —— 它只给 PageData 追加页面，
+		// 而 CameraPageData 的元素数由拍照时的 emplace_back 决定。展台模式下
+		// Write::Page 可能大于 CameraPageData.size() - 1，直接下标访问会越界崩溃。
+		// 因此这里对两份数据分别建页：始终保证 PageData 有对应页，展台模式再
+		// 通过 resize 补足 CameraPageData，使 Write::Page 在两侧都合法。
+		Write::MakeNewPage();
+
+		if (WriteCamera::EnableWriteCamera)
+		{
+			// resize 只在不足时扩容，已存在的页（相册照片）保持原样不被清空
+			if (CameraPageData.size() <= size_t(Write::Page))
+			{
+				CameraPageData.resize(size_t(Write::Page) + 1);
+			}
+		}
+
+		// MakeNewPage / resize 都可能触发 vector 扩容，
+		// 因此引用必须在建页之后再获取，不能提前缓存。
+		PageDataS& page = WriteCamera::EnableWriteCamera
+			? CameraPageData[Write::Page]
+			: PageData[Write::Page];
+		page.Images.clear();
+		page.Images.emplace_back();
+
+		ImageStruct& target = page.Images.back();
+		target.path.clear();
+		target.img = img;
+		target.rote = 0;
+
+		target.w = img.w;
+		target.h = img.h;
+
+		// 图片过大时按窗口比例等比缩放，保证初始可见
+		const float kMaxRatio = 0.7f;
+		if (target.h > WindowSize.y * kMaxRatio)
+		{
+			target.w = int(img.w * WindowSize.y * kMaxRatio / target.h);
+			target.h = int(WindowSize.y * kMaxRatio);
+		}
+		if (target.w > WindowSize.x * kMaxRatio)
+		{
+			target.h = int(target.h * WindowSize.x * kMaxRatio / target.w);
+			target.w = int(WindowSize.x * kMaxRatio);
+		}
+
+		// 按「0 位移 + 100% 缩放」计算居中：此时期望的绘制结果里
+		// CameraPos 视为 (0,0)、Scale 视为 1.0，故屏幕坐标 = pos + 尺寸/2，
+		// 直接反解 pos = 窗口中心 - 半宽高即可。
+		// 注意：这里只计算坐标，不修改 page.CameraPos / page.Scale，
+		// 视图状态由页面自身维护，避免影响其他内容的显示位置。
+		target.pos.x = int(WindowSize.x / 2) - target.w / 2;
+		target.pos.y = int(WindowSize.y / 2) - target.h / 2;
+
+		// 进度统计：总数累加，序号取服务器分配的 seq（从 1 开始），
+		// 供 DrawShareImageTip 显示「已接收图片：n/m」。
+		ShareImageRecvTotal += 1;
+		ShareImageRecvIndex = int(data.seq);
+	}
+
+	// 一次性推入完成后统一刷新图层与页签，避免逐张刷新造成的闪烁
+	FlushImageLayer = true;
+	FlushWriteLayer = true;
+	Tool::UpdatePage();
+
+	BottomMessage::AddMessage(303, L"已接收手机图片", BottomMessageType_SUCCESS);
 }
 
 #pragma endregion
