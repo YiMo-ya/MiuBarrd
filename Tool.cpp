@@ -444,6 +444,14 @@ int ChooseGetType(RenWin& window)
 void Get(RenWin& window)
 {
 	NeedEnterGet = false;
+
+	if (WriteCamera::EnableWriteCamera)
+	{
+		Message::ShowMessage("无法在展台页面导入文件", "不支持的功能", ICOTYPE_ERROR, { "确定" }, 1, L"MiuBarrd");
+		XWindow::SetBackGroundColor(User::BackColor);
+		return;
+	}
+
 	int type = ChooseGetType(window);
 	if (type == 0)
 	{
@@ -809,9 +817,9 @@ class MainBar
 	}
 
 	//图标y偏移
-	EV IconYOffset[5];
+	EV IconYOffset[6];
 	//图标缩放
-	EV IconScale[5];
+	EV IconScale[6];
 
 	//底线坐标
 	EV BottomLineX1, BottomLineX2;
@@ -838,9 +846,9 @@ public:
 
 	float CenterX = 0.5, CenterY = 0;
 
-	wstring ToolName[5] =
+	wstring ToolName[6] =
 	{
-		L"软笔",L"橡皮擦",L"移动缩放",L"撤销",L"更多插件"
+		L"软笔",L"橡皮擦",L"选择",L"移动缩放",L"撤销",L"更多插件"
 	};
 
 	void DrawBack(RenWin& window)
@@ -908,11 +916,11 @@ public:
 	void Draw(RenWin& window)
 	{
 		//图标
-		static IMAGE Icon[4];
+		static IMAGE Icon[5];
 		static IMAGE PenIcon[4];
 		
 		//图标启动y偏移
-		static EV IconStartYOffset[5];
+		static EV IconStartYOffset[6];
 		//启动时间
 		static int StartClock = 30;
 		if (StartClock > -90) StartClock -= 1;
@@ -925,7 +933,7 @@ public:
 			
 			//设置大小动画
 			size.x.SetAnimationStartValue(0);
-			size.x.SetAnimation(BasicSize * 5, TotalFrame);
+			size.x.SetAnimation(BasicSize * 6, TotalFrame);
 			size.y.SetAnimationStartValue(BasicSize);
 
 			//设置坐标动画
@@ -939,8 +947,8 @@ public:
 			CenterX = 0.5;
 
 			//图标初始化
-			wstring ImgName[4] = {L"Erase.dll",L"Move.dll",L"Back.dll",L"More.dll" };
-			for (int i = 0; i < 4; i++) 
+			wstring ImgName[5] = {L"Erase.dll",L"Choose.dll",L"Move.dll",L"Back.dll",L"More.dll"};
+			for (int i = 0; i < 5; i++) 
 			{
 				if (!LoadIcon(Icon[i], ImgPath + L"MainTool\\" + ImgName[i]))
 				{
@@ -956,7 +964,7 @@ public:
 				}
 			}
 
-			for (int i = 0; i < 5; i++)
+			for (int i = 0; i < 6; i++)
 			{
 				IconScale[i].SetAnimationStartValue(20);
 				IconScale[i].SetAnimation(100, TotalFrame);
@@ -968,15 +976,15 @@ public:
 
 			BottomLineBasicLengh = WindowSize.x * 0.01;
 			BottomLineScale.SetAnimation(100, TotalFrame);
-			BottomLineX1.SetAnimationStartValue(BasicSize / 2 - BottomLineBasicLengh);
-			BottomLineX2.SetAnimationStartValue(BasicSize / 2 + BottomLineBasicLengh);
+			BottomLineX1.SetAnimationStartValue(-BottomLineBasicLengh);
+			BottomLineX2.SetAnimationStartValue(BottomLineBasicLengh);
 			
 		}
 
 		//脏标记
 		if(!NeedReDraw)
 			NeedReDraw = IsAnimations(
-			size.x,size.y,IconScale[4],IconScale[3],IconScale[2],IconScale[1],IconScale[0],
+			size.x,size.y, IconScale[5],IconScale[4],IconScale[3],IconScale[2],IconScale[1],IconScale[0],
 			BottomLineX1,BottomLineX2,BottomLineScale
 			);
 
@@ -1004,7 +1012,7 @@ public:
 			BottomLineScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 3);
 
 			//图标弹跳动画
-			for (int i = 0; i < 5; i++)
+			for (int i = 0; i < 6; i++)
 			{
 				if (IconYOffset[i].start < IconYOffset[i].end)
 					IconYOffset[i].UpdateAnimation(XEase::EaseBasic::easeOut, 3);
@@ -1018,7 +1026,7 @@ public:
 			//图标动画更新，只有在启动时才执行逻辑，提高性能，更新y偏移与缩放
 			if (StartClock > -90)
 			{
-				for (int i = 0; i < 5; i++)
+				for (int i = 0; i < 6; i++)
 				{
 					if (i == 0)
 					{
@@ -1035,7 +1043,7 @@ public:
 			//启动动画后，只更新缩放
 			else
 			{
-				for (int i = 0; i < 5; i++)
+				for (int i = 0; i < 6; i++)
 				{
 					if (i == 0)
 					{
@@ -1060,10 +1068,10 @@ public:
 				DrawGlassBar(1, 1, size.x.value, size.y.value, RoundSize, rt);
 
 				//绘制图标
-				for (int i = 0; i < 5; i++)
+				for (int i = 0; i < 6; i++)
 				{
 					//计算坐标（居中）
-					int x = size.x.value / 2 + BasicSize * (i - 2);
+					int x = size.x.value / 2 + BasicSize * (i - 3) + BasicSize / 2;
 					static int y = BasicSize / 2;
 
 					static float ImgScale = (float)IconSize / 512.0;
@@ -1097,12 +1105,12 @@ public:
 				//绘制文字
 				XText::SetFontConfig(Color::White, FONTSIZE * 0.9);
 				XText::SetFontAdjust(ADJUST_CENTER, ADJUST_CENTER);
-				for (int i = 0; i < 5; i++)
+				for (int i = 0; i < 6; i++)
 				{
 					if (i == Tool::ToolCount && StartClock < -45) continue;
 
 					//计算坐标（居中）
-					int x = size.x.value / 2 + BasicSize * (i - 2);
+					int x = size.x.value / 2 + BasicSize * (i - 3) + BasicSize / 2;
 					static int y = BasicSize * 0.91;
 
 					XText::Xyprintf(1 + x, 1 + y + IconStartYOffset[i].value, ToolName[i],rt);
@@ -1128,9 +1136,9 @@ public:
 		//按键处理
 		if(XMsg::MouseMsg::IsMouseDown(VK::MouseLeft))
 		{
-			for (int i = 0; i < 5; i++)
+			for (int i = 0; i < 6; i++)
 			{
-				int x = pos.x.value + size.x.value / 2 + BasicSize * (i - 2) - BasicSize / 2- size.x.value * CenterX + 1,
+				int x = pos.x.value + size.x.value / 2 + BasicSize * (i - 3)- size.x.value * CenterX + 1,
 					y = pos.y.value - size.y.value * CenterY + 1, 
 					w = BasicSize, h = BasicSize;
 
@@ -1138,7 +1146,7 @@ public:
 				{
 
 					//当工具选项不等于当前选项，切换至此，且隐藏更多工具栏
-					if (Tool::ToolCount != i && i != 3)
+					if (Tool::ToolCount != i && i != 4)
 					{
 						//更新图标动画
 						IconYOffset[i].SetAnimation(-UISpace / 2, TotalFrame);
@@ -1147,9 +1155,9 @@ public:
 						IconScale[i].SetAnimation(100, TotalFrame);
 
 						//更新底线动画
-						int XOffset = (size.x.value - BasicSize * 5) / 2;
-						BottomLineX1.SetAnimation(size.x.value / 2 + BasicSize * (i - 2) - BottomLineBasicLengh - XOffset, TotalFrame / 3);
-						BottomLineX2.SetAnimation(size.x.value / 2 + BasicSize * (i - 2) + BottomLineBasicLengh - XOffset, TotalFrame / 3);
+						int XOffset = (size.x.value - BasicSize * 6) / 2;
+						BottomLineX1.SetAnimation(size.x.value / 2 + BasicSize * (i - 3) - BottomLineBasicLengh - XOffset, TotalFrame / 3);
+						BottomLineX2.SetAnimation(size.x.value / 2 + BasicSize * (i - 3) + BottomLineBasicLengh - XOffset, TotalFrame / 3);
 
 						if (i < Tool::ToolCount) IsLeft = true;
 						else IsLeft = false;
@@ -1160,7 +1168,7 @@ public:
 						//隐藏更多工具栏
 						Tool::HideMoreBar();
 
-						if (i == 4) Ext();
+						if (i == 5) Ext();
 					}
 					//召唤更多选项，或者单独功能
 					else
@@ -1169,15 +1177,15 @@ public:
 						IconScale[i].SetAnimationStartValue(60);
 						IconScale[i].SetAnimation(100, TotalFrame);
 
-						if(i != 3)
+						if(i != 4)
 						{
 							//底线收缩动画
 							BottomLineScale.SetAnimationStartValue(40);
 							BottomLineScale.SetAnimation(100, TotalFrame);
 
 							//召唤更多选项
-							if (i == 4) Ext();
-							else if(i != 2) UpdateMoreBarVisible();
+							if (i == 5) Ext();
+							else if(i != 3 && i != 2) UpdateMoreBarVisible();
 						}
 						else
 						{
@@ -1189,20 +1197,20 @@ public:
 		}
 		if (XMsg::MouseMsg::IsMouseDown(VK::MouseRight))
 		{
-			for (int i = 0; i < 5; i++)
+			for (int i = 0; i < 6; i++)
 			{
-				int x = pos.x.value + size.x.value / 2 + BasicSize * (i - 2) - BasicSize / 2 - size.x.value * CenterX + 1,
+				int x = pos.x.value + size.x.value / 2 + BasicSize * (i - 3) - size.x.value * CenterX + 1,
 					y = pos.y.value - size.y.value * CenterY + 1,
 					w = BasicSize, h = BasicSize;
 
 				if (XMsg::MouseMsg::IsMouseIn(x, y, w, h))
 				{
-					if(i == 2)
+					if(i == 3)
 					{
 						Write::ResetMove();
 						BottomMessage::AddMessage(107, L"已复位", BottomMessageType_INFO, 180);
 					}
-					if (i == 3)
+					if (i == 4)
 					{
 						Write::EraseAll();
 
@@ -1272,9 +1280,9 @@ public:
 		IconScale[index].SetAnimation(100, TotalFrame);
 
 		//更新底线动画
-		int XOffset = (size.x.value - BasicSize * 5) / 2;
-		BottomLineX1.SetAnimation(size.x.value / 2 + BasicSize * (index - 2) - BottomLineBasicLengh - XOffset, TotalFrame / 3);
-		BottomLineX2.SetAnimation(size.x.value / 2 + BasicSize * (index - 2) + BottomLineBasicLengh - XOffset, TotalFrame / 3);
+		int XOffset = (size.x.value - BasicSize * 6) / 2;
+		BottomLineX1.SetAnimation(size.x.value / 2 + BasicSize * (index - 3) - BottomLineBasicLengh - XOffset, TotalFrame / 3);
+		BottomLineX2.SetAnimation(size.x.value / 2 + BasicSize * (index - 3) + BottomLineBasicLengh - XOffset, TotalFrame / 3);
 
 		if (index < Tool::ToolCount) IsLeft = true;
 		else IsLeft = false;
@@ -2315,9 +2323,9 @@ public:
 			//其余
 			else
 			{
-				if (size.x.value != BasicSize * 5 || size.x.end != BasicSize * 5)
+				if (size.x.value != BasicSize * 6 || size.x.end != BasicSize * 6)
 				{
-					size.x.SetAnimation(BasicSize * 5, TotalFrame);
+					size.x.SetAnimation(BasicSize * 6, TotalFrame);
 				}
 			}
 		}
@@ -2343,17 +2351,17 @@ void SetMoreBarVisible(bool visible)
 		}
 		else
 		{
-			if (MainToolBar.size.x.value > BasicSize * 5)
+			if (MainToolBar.size.x.value > BasicSize * 6)
 			{
-				MainToolBar.size.x.SetAnimation(BasicSize * 5, TotalFrame);
+				MainToolBar.size.x.SetAnimation(BasicSize * 6, TotalFrame);
 			}
 		}
 	}
 	else
 	{
-		if (MainToolBar.size.x.value > BasicSize * 5)
+		if (MainToolBar.size.x.value > BasicSize * 6)
 		{
-			MainToolBar.size.x.SetAnimation(BasicSize * 5, TotalFrame);
+			MainToolBar.size.x.SetAnimation(BasicSize * 6, TotalFrame);
 		}
 	}
 
@@ -2657,7 +2665,7 @@ class ExtBar
 
 	EV2 size, pos;
 
-	wstring ExtenPath = filesystem::current_path().wstring() + L"\\Extens\\";
+	wstring ExtenPath = filesystem::current_path().wstring() + L"\\Extens";
 
 	void StartExcel()
 	{
@@ -2667,27 +2675,6 @@ class ExtBar
 	void StartGeometricLibrary()
 	{
 		NeedEnterGeometricLibrary = true;
-	}
-	void StartMini()
-	{
-		if (XFile::Exists(ExtenPath + L"MiniMiuBarrd.exe"))
-		{
-			ShellExecuteW(NULL, L"open", (ExtenPath + L"MiniMiuBarrd.exe").c_str(), NULL, NULL, SW_SHOW);
-		}
-		else
-		{
-			RightMessage::ShowMessage(
-				L"无法加载迷你黑板插件，这可能是MiuBarrd的配置出现错误，错误代码：NOLNK", L"加载插件", RightMessageType_ERROR);
-
-			BottomMessage::AddMessage(106, L"加载插件失败", BottomMessageType_ERROR, 180);
-		}
-	}
-	void StartAI()
-	{
-		RightMessage::ShowMessage(
-			L"终端阻止运行此插件，错误代码：TERMINALSTOP", L"加载插件", RightMessageType_ERROR);
-
-		BottomMessage::AddMessage(106, L"加载插件失败", BottomMessageType_ERROR, 180);
 	}
 	void StartTerminal()
 	{
@@ -2703,8 +2690,6 @@ class ExtBar
 	{
 		if (path == L"_Excel") StartExcel();
 		else if (path == L"_GeometricLibrary") StartGeometricLibrary();
-		else if (path == L"_MinNiMiuBarrd") StartMini();
-		else if (path == L"_AI") StartAI();
 		else if (path == L"_Terminal") StartTerminal();
 		else if (path == L"_MindMap") StartMindMap();
 		else
@@ -2713,14 +2698,14 @@ class ExtBar
 			{
 				ShellExecuteW(NULL, L"open", path.c_str(), NULL, NULL, SW_SHOW);
 
-				BottomMessage::AddMessage(106, L"正在加载：视频展台", BottomMessageType_SUCCESS, 180);
+				BottomMessage::AddMessage(106, L"已加载：" + name + L"插件", BottomMessageType_SUCCESS, 180);
 			}
 			else
 			{
 				RightMessage::ShowMessage(
-					L"无法加载" + name + L"插件，错误代码：NOLNK", L"加载插件", RightMessageType_ERROR);
+					L"无法加载" + name + L"插件，错误代码：NOAPPLICATION", L"加载插件", RightMessageType_ERROR);
 
-				BottomMessage::AddMessage(106, L"加载插件失败", BottomMessageType_ERROR, 180);
+				BottomMessage::AddMessage(106, L"加载插件：" + name + L"失败", BottomMessageType_ERROR, 180);
 			}
 		}
 	}
@@ -2728,6 +2713,75 @@ class ExtBar
 public:
 
 	bool Visible = false;
+
+	void InitExt()
+	{
+		exts.clear();
+
+		//预加载插件
+		const int MySelf = 4;
+
+		static wstring PerExtName[MySelf] = {
+				L"表格",L"思维导图",L"几何图库",L"终端"
+		};
+		static wstring PerExtImageName[MySelf] = {
+			L"Excel.dll",L"MindMap.dll",L"GeometricLibrary.dll",L"Terminal.dll"
+		};
+		static wstring PerExtPath[MySelf] = {
+			L"_Excel",L"_MindMap",L"_GeometricLibrary",L"_Terminal"
+		};
+
+		for (int i = 0; i < MySelf; i++)
+		{
+			exts.emplace_back();
+
+			auto& ex = exts.back();
+
+			ex.name = PerExtName[i];
+			XImage::NewImage(ex.img, ImgPath + L"Exten\\" + PerExtImageName[i]);
+			ex.path = PerExtPath[i];
+
+			ex.IconScale.SetAnimationStartValue(0);
+			ex.IconScale.SetAnimation(100, TotalFrame);
+		}
+
+		//加载插件
+		vector<Path> ExtLoads = XFile::ListDirectories(ExtenPath);
+		for (int i = 0;i < ExtLoads.size();i++)
+		{
+			//拼接配置位置
+			wstring ExtIniPath = ExtLoads[i].wstring() + L"\\INI.ini";
+
+			ifstream IniRead(ExtIniPath);
+			while (1)
+			{
+				string NAME, PATH, IMGPATH;
+
+				IniRead >> NAME >> PATH >> IMGPATH;
+
+				if (NAME.empty() || PATH.empty() || IMGPATH.empty())
+					break;
+				if (!XFile::Exists(ExtLoads[i].wstring() + L"\\" + XString::Convert::utf8_to_wstring(IMGPATH)))
+				{
+					IMGPATH = XString::Convert::wstring_to_utf8(ImgPath) + "Exten\\Default.dll";
+				}
+				else
+				{
+					IMGPATH = XString::Convert::wstring_to_utf8(ExtLoads[i].wstring() + L"\\" + XString::Convert::utf8_to_wstring(IMGPATH));
+				}
+
+				exts.emplace_back();
+
+				exts.back().name = XString::Convert::utf8_to_wstring(NAME);
+				exts.back().path = XString::Convert::utf8_to_wstring(PATH);
+				XImage::NewImage(exts.back().img, XString::Convert::utf8_to_wstring(IMGPATH));
+
+				exts.back().IconScale.SetAnimationStartValue(0);
+				exts.back().IconScale.SetAnimation(100, TotalFrame);
+			}
+		}
+
+	}
 
 	void Draw(RenWin& window)
 	{
@@ -2739,34 +2793,7 @@ public:
 			pos.y.SetAnimationStartValue(WindowSize.y);
 			pos.x.SetAnimationStartValue(WindowSize.x / 2 - size.x.value / 2);
 
-			//初始化插件
-#pragma region MyRegion
-
-			static wstring PerExtName[6] = {
-				L"表格",L"思维导图",L"几何图库",L"迷你黑板",L"语音助手",L"终端"
-			};
-			static wstring PerExtImageName[6] = {
-				L"Excel.dll",L"MindMap.dll",L"GeometricLibrary.dll",L"MinNiMiuBarrd.dll",L"AI.dll",L"Terminal.dll"
-			};
-			static wstring PerExtPath[6] = {
-				L"_Excel",L"_MindMap",L"_GeometricLibrary",L"_MinNiMiuBarrd",L"_AI",L"_Terminal"
-			};
-
-			for (int i = 0; i < 6; i++)
-			{
-				exts.emplace_back();
-
-				auto& ex = exts.back();
-
-				ex.name = PerExtName[i];
-				XImage::NewImage(ex.img, ImgPath + L"Exten\\" + PerExtImageName[i]);
-				ex.path = PerExtPath[i];
-
-				ex.IconScale.SetAnimationStartValue(0);
-				ex.IconScale.SetAnimation(100, TotalFrame);
-			}
-
-#pragma endregion
+			InitExt();
 
 			while (exts.size() > 30)
 			{
@@ -2827,7 +2854,7 @@ public:
 				{
 					if (XMsg::MouseMsg::IsMouseIn(x - IconSize * 0.1, pos.y.value + UISpace + yPatch, IconSize * TotalScale, IconSize * 1.1 * TotalScale))
 					{
-						Run(ex.path);
+						Run(ex.path,ex.name);
 
 						ex.IconScale.SetAnimationStartValue(50);
 						ex.IconScale.SetAnimation(100, TotalFrame);
@@ -2849,7 +2876,7 @@ public:
 			}
 
 			//自动回收
-			if (Tool::ToolCount != 4) SetVisible(false);
+			if (Tool::ToolCount != 5) SetVisible(false);
 		}
 
 		//自动收回
@@ -2873,11 +2900,7 @@ public:
 		{
 			pos.y.SetAnimation(WindowSize.y);
 
-			for (int i = 0; i < exts.size(); i++)
-			{
-				exts[i].IconScale.SetAnimationStartValue(0);
-				exts[i].IconScale.SetAnimation(100, TotalFrame / 2);
-			}
+			init = false;
 		}
 
 		Visible = v;
@@ -4201,14 +4224,192 @@ class CameraPreview
 	vector<bool> ThumbDrawn;
 	//缩略图上次绘制时使用的旋转角，用于判断旋转变化后需重建
 	int LastRote[12] = { 0 };
+	//缩略图上次绘制时对应的相册页码：拍照后组内页码会整体平移，必须记录才能发现源图已被替换
+	int LastPage[12] = { 0 };
+	//缩略图上次绘制时源图像的宽高：同页码被新照片覆盖时，尺寸也可能变化
+	int LastPhotoW[12] = { 0 };
+	int LastPhotoH[12] = { 0 };
 	EV ThumbScale[12];
 	EV ThumbOffsetY[12];
+
+	//分组切换时整组缩略图的横向滑动偏移（像素）：切换瞬间设为起始偏移，随后缓动回 0
+	EV GroupSlide;
 
 	//面板内容缩放
 	EV xScale;
 
 	//缩略图数量上限
+	//每组最多 6 张：数量减少后单张可放大，同时为左右切换按钮留出足够空间
 	static const int MAX_THUMB = 9;
+
+	//左右切换按钮的图形尺寸与边距（绘制与点击热区共用，保证两者几何完全一致）
+	//注意：BasicSize 是运行期全局变量，不能用 constexpr 初始化（常量表达式要求编译期可求值），
+	//因此这里用 static const，类内静态成员此处仅作声明，定义放在类外
+	static const float ArrowSizeAll;
+	static const float ArrowPadAll;
+
+	//当前预览的缩略图分组（每 6 张一组，0 表示第一组）
+	int PageGroup = 0;
+
+	//本组第一张缩略图在相册中的页码（从 1 开始）
+	int GroupFirstPage() const { return PageGroup * MAX_THUMB + 1; }
+
+	//相册照片总数（不含实时页 0）
+	int TotalPhoto() const
+	{
+		int count = Write::TotalPage - 1;
+		if (count < 0) count = 0;
+		return count;
+	}
+
+	//总分组数（至少 1 组）
+	int GroupCount() const
+	{
+		int count = TotalPhoto();
+		int groups = (count + MAX_THUMB - 1) / MAX_THUMB;
+		return groups < 1 ? 1 : groups;
+	}
+
+	//本组实际显示的缩略图数量
+	int GroupPhotoCount() const
+	{
+		int total = TotalPhoto();
+		int start = PageGroup * MAX_THUMB;
+		if (start >= total) return 0;
+
+		int remain = total - start;
+		return remain > MAX_THUMB ? MAX_THUMB : remain;
+	}
+
+	//是否存在上一组 / 下一组
+	bool HasPrevGroup() const { return PageGroup > 0; }
+	bool HasNextGroup() const { return PageGroup + 1 < GroupCount(); }
+
+	//缩略图尺寸：高度略小于面板高度，保证上下留白均匀（绘制与热区共用同一值）
+	static int ThumbPixel()
+	{
+		static int v = BasicSize * 0.9 * 1.25;
+		return v;
+	}
+
+	//缩略图固定水平间距（绘制与热区共用同一值）
+	static float ThumbGapPixel()
+	{
+		static float v = BasicSize * 0.12;
+		return v;
+	}
+
+	//单侧切换按钮占用宽度：左右两侧各留同样宽度，缩略图列表夹在中间
+	static float ArrowZoneWidth()
+	{
+		static float v = ArrowPadAll + ArrowSizeAll + BasicSize * 0.6f;
+		return v;
+	}
+
+	//预览面板宽度：沿用原来的紧凑宽度（左按钮区 + 缩略图 + 内部间距 + 右按钮区）
+	//注意：之前把 ArrowZoneWidth() 重复累加导致面板被撑宽，现恢复为原宽度
+	static float PreviewWidth()
+	{
+		static float v = BasicSize * 12 + UISpace;
+		return v;
+	}
+
+	//面板左边缘：按 PreviewWidth 水平居中，保证与绘制宽度严格一致
+	static float PreviewLeft()
+	{
+		int v = MainToolBar.pos.x.value - MainToolBar.size.x.value / 2;
+		return v;
+	}
+
+	/// <summary>
+	/// 使全部缩略图纹理缓存失效，强制下一次绘制重新上传源图。
+	/// 拍照/删除照片后必须调用：ThumbCache 保存的是上次渲染的像素，
+	/// 仅靠旋转角无法发现“同页码被新照片覆盖”的情况。
+	/// </summary>
+	void InvalidateThumb()
+	{
+		int count = (int)ThumbDrawn.size();
+		ThumbDrawn.assign(count, false);
+
+		//旋转角、页码、源图尺寸记录全部清零，任何一项不同都会触发重建
+		for (int i = 0; i < 12; i++)
+		{
+			LastRote[i] = 0;
+			LastPage[i] = 0;
+			LastPhotoW[i] = 0;
+			LastPhotoH[i] = 0;
+		}
+
+		NeedReDraw = true;
+	}
+
+	/// <summary>
+	/// 分组切换时整组缩略图的滑动起始距离（像素）。
+	/// 与单张缩略图宽度挂钩，保证不同分辨率下滑动幅度视觉一致。
+	/// </summary>
+	/// <returns>滑动距离（像素）</returns>
+	static float SlideDistance()
+	{
+		static float v = (ThumbPixel() + ThumbGapPixel()) * 1.2f;
+		return v;
+	}
+
+	/// <summary>
+	/// 分组滑动动画的帧数。比展开动画（TotalFrame）略短，让切换手感轻快。
+	/// </summary>
+	/// <returns>动画帧数</returns>
+	static int SlideFrame()
+	{
+		static int v = max(8, TotalFrame * 3 / 4);
+		return v;
+	}
+
+	/// <summary>
+	/// 切换分组：dir 为 -1 表示上一组，1 表示下一组。
+	/// 切换时启动整组内容的水平滑动（easeOut）动画，而不是瞬间替换。
+	/// </summary>
+	/// <param name="dir">切换方向，-1 上一组，1 下一组</param>
+	void SwitchGroup(int dir)
+	{
+		int target = PageGroup + dir;
+		if (target < 0 || target >= GroupCount()) return;
+
+		PageGroup = target;
+
+		//换组后所有缩略图动画状态清零，避免残留旧组的缓动进度
+		for (int i = 0; i < 12; i++)
+		{
+			ThumbScale[i].SetAnimationStartValue(100);
+			ThumbScale[i].SetAnimation(100, 1);
+
+			ThumbOffsetY[i].SetAnimationStartValue(0);
+			ThumbOffsetY[i].SetAnimation(0, 1);
+
+			//旋转角记录清零，强制新组重新上传源图
+			LastRote[i] = 0;
+		}
+
+		//分组内容整体变化，缓存与绘制标记全部失效
+		InvalidateThumb();
+
+		//上一组的纹理仍留在 ThumbCache 里，若不清空尺寸，绘制时会被判定为“已创建”，
+		//继续显示旧组的画面，导致切换分组后不刷新
+		for (int i = 0; i < (int)ThumbCache.size(); i++)
+		{
+			ThumbCache[i] = RenderTexture();
+		}
+
+		//新组张数可能少于旧组，按新张数重新对齐缓存与脏标记
+		int count = GroupPhotoCount();
+		ThumbCache.resize(count);
+		ThumbDrawn.assign(count, false);
+
+		//滑动动画：新组从切换方向的一侧滑入（上一组从左侧、下一组从右侧），缓动到 0
+		GroupSlide.SetAnimationStartValue(-dir * SlideDistance());
+		GroupSlide.SetAnimation(0, SlideFrame());
+
+		NeedReDraw = true;
+	}
 
 	//点击某张缩略图后的回调：跳转到该相册页
 	void ChoosePage(int page)
@@ -4296,27 +4497,21 @@ public:
 
 	void Draw(RenWin& window)
 	{
-		static IMAGE AlbumIcon;
 		static IMAGE CloseIcon;
 
 		//初始化
 		if (!init)
 		{
-			if (!LoadIcon(AlbumIcon, ImgPath + L"Camera\\Images.dll"))
-			{
-				RightMessage::ShowMessage(L"错误：定位图像Images失败，使用默认图标", L"图标加载", RightMessageType_ERROR, true);
-			}
-
 			if (!LoadIcon(CloseIcon, ImgPath + L"Camera\\CloseCamera.dll"))
 			{
 				RightMessage::ShowMessage(L"错误：定位图像CloseCamera失败，使用默认图标", L"图标加载", RightMessageType_ERROR, true);
 			}
 
 			//与更多工具栏一致：从窗口底部弹出
-			size.x.SetAnimationStartValue(BasicSize * 11 + UISpace);
+			size.x.SetAnimationStartValue(PreviewWidth());
 			size.y.SetAnimationStartValue(BasicSize * 1.5);
 			pos.y.SetAnimationStartValue(WindowSize.y);
-			pos.x.SetAnimationStartValue(WindowSize.x / 2 - BasicSize * 6);
+			pos.x.SetAnimationStartValue(PreviewLeft());
 
 			//缩放动画初值
 			xScale.SetAnimationStartValue(100);
@@ -4325,7 +4520,7 @@ public:
 		}
 
 		//与更多工具栏一致：用 xScale 做弹出缩放
-		pos.x.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
+		pos.x.value = PreviewLeft();
 		pos.y.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
 		xScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
 
@@ -4344,9 +4539,12 @@ public:
 			}
 		}
 
+		//分组切换滑动动画：整组缩略图从一侧滑入并缓动停稳（easeOut，先快后慢）
+		GroupSlide.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
+
 		//脏标记：动画未结束时需要重绘
 		if (!NeedReDraw)
-			NeedReDraw = IsAnimations( pos.y, pos.x, xScale );
+			NeedReDraw = IsAnimations( pos.y, pos.x, xScale, GroupSlide );
 
 		if (!NeedReDraw)
 		{
@@ -4362,10 +4560,23 @@ public:
 			NeedReDraw = thumbAnimating;
 		}
 
-		//当前相册总张数：CameraPageData 中除实时页(0)外的张数
-		int photoCount = Write::TotalPage - 1;
-		if (photoCount < 0) photoCount = 0;
-		if (photoCount > MAX_THUMB) photoCount = MAX_THUMB;
+		//相册张数变化导致分组越界时，把分组夹回最后有效组
+		int groupCount = GroupCount();
+		if (PageGroup >= groupCount) PageGroup = groupCount - 1;
+		if (PageGroup < 0) PageGroup = 0;
+
+		//本组实际显示的缩略图张数（最多 MAX_THUMB 张）
+		int photoCount = GroupPhotoCount();
+
+		//相册张数变化（拍照/删除）后缩略图缓存必须整体失效：
+		//拍照使 Write::TotalPage 增加，第二组及以上组的组内页码会整体平移，
+		//仅比较旋转角无法发现源图已被替换，预览就会长时间停留在旧画面上。
+		static int LastTotalPage = -1;
+		if (LastTotalPage != Write::TotalPage)
+		{
+			LastTotalPage = Write::TotalPage;
+			InvalidateThumb();
+		}
 
 		//重建缩略图缓存（张数变化时）
 		if ((int)ThumbCache.size() != photoCount)
@@ -4377,7 +4588,13 @@ public:
 			//缩略图数量变化后，源图缓存与旋转角记录必须一并失效，
 			//否则新页会复用旧页的旋转角判断，导致方向错误或源图不刷新。
 			ThumbDrawn.assign(photoCount, false);
-			for (int i = 0; i < 12; i++) LastRote[i] = 0;
+			for (int i = 0; i < 12; i++)
+			{
+				LastRote[i] = 0;
+				LastPage[i] = 0;
+				LastPhotoW[i] = 0;
+				LastPhotoH[i] = 0;
+			}
 
 			for (int i = StartIndex; i < photoCount; i++)
 			{
@@ -4401,20 +4618,20 @@ public:
 				//绘制底色
 				DrawGlassBar(1, 1, size.x.value, size.y.value, RoundSize, rt);
 
-				static float Scale = IconSize / 512.0;
-
-				//入口图标与标题
-				XImage::PutScaleImage(AlbumIcon, BasicSize * 0.5, size.y.value * 0.5, Scale, Scale, rt, 0.5, 0.5);
-
-				XText::SetFontConfig(Color::White, FONTSIZE * 0.7);
-				XText::SetFontAdjust(ADJUST_CENTER, ADJUST_CENTER);
-				XText::Xyprintf(BasicSize * 0.5, size.y.value - BasicSize * 0.1, L"相册", rt);
-
 				//缩略图列表
 				if (photoCount > 0)
 				{
-					//缩略图尺寸较原尺寸放大约 30%
-					static int ThumbSize = BasicSize * 0.9 * 1.3;
+					//缩略图尺寸：高度略小于面板高度，保证上下留白均匀
+					static int ThumbSize = BasicSize * 0.9 * 1.25;
+
+					//缩略图固定水平间距
+					static float ThumbGap = BasicSize * 0.12;
+
+					//单侧切换按钮区域宽度（与 PreviewWidth 计算共用同一函数，避免参数漂移）
+					float ArrowZone = ArrowZoneWidth();
+
+					//缩略图起始位置：从左侧按钮区之后开始，左对齐而不是居中
+					float listStart = ArrowZone;
 
 					//缩略图源图仅在页数变化或缓存未填充时重建，避免每次重绘都重传纹理
 					if ((int)ThumbDrawn.size() != photoCount)
@@ -4422,9 +4639,19 @@ public:
 						ThumbDrawn.assign(photoCount, false);
 					}
 
+					//页码文字高度：字号随单张缩放变化，这里按未缩放字号预留行高，
+					//使文字整体落在缩略图下沿与面板下沿之间的留白内
+					int tagFontSize = max(1, (int)(FONTSIZE * 1.15f));
+
+					//分组切换滑动偏移：切换瞬间整组缩略图整体偏移，随后缓动回 0
+					float slideX = -GroupSlide.value;
+
 					for (int i = 0; i < photoCount; i++)
 					{
 						float SubScale = ThumbScale[i].value / 100.0;
+
+						//本组第 i 张对应的真实相册页码（从 1 开始）
+						int page = PageGroup * MAX_THUMB + i + 1;
 
 						//每张缩略图把对应相册页渲染到独立纹理
 						if (ThumbCache[i].getSize().x == 0)
@@ -4433,16 +4660,22 @@ public:
 							ThumbDrawn[i] = false;
 						}
 
-						// 纹理已绘制过则跳过重绘：缩略图内容只取决于照片与其旋转角，
-						// 而 rotate / 换页都会走此处重建，因此缓存命中时无需每帧刷纹理。
-						if (!ThumbDrawn[i] || LastRote[i] != WriteCamera::GetRote(i + 1))
+						//取该页照片与旋转角（下面用它们判断缓存是否仍然有效）
+						IMAGE& photo = WriteCamera::GetPhoto(page);
+						int rote = WriteCamera::GetRote(page);
+
+						//缓存失效判定：未绘制过、旋转角变化、页码变化、源图尺寸变化时都要重建。
+						//只比较旋转角是不够的——拍照后同一页码会被新照片覆盖，旋转角往往仍是 0，
+						//第二组及以上组的页码还会整体平移，缓存就会一直显示旧画面。
+						bool needRebuild =
+							!ThumbDrawn[i]
+							|| LastRote[i] != rote
+							|| LastPage[i] != page
+							|| LastPhotoW[i] != photo.w
+							|| LastPhotoH[i] != photo.h;
+
+						if (needRebuild)
 						{
-							//取该页照片并等比缩放绘制到缩略图纹理
-							IMAGE& photo = WriteCamera::GetPhoto(i + 1);
-
-							//读取该页记录的旋转角度，使缩略图与实际显示方向一致
-							int rote = WriteCamera::GetRote(i + 1);
-
 							ThumbCache[i].clear(Color(30, 30, 30));
 
 							if (photo.w > 0 && photo.h > 0)
@@ -4470,11 +4703,18 @@ public:
 
 							ThumbDrawn[i] = true;
 							LastRote[i] = rote;
+							LastPage[i] = page;
+							LastPhotoW[i] = photo.w;
+							LastPhotoH[i] = photo.h;
 						}
 
-						//缩略图在面板内水平排布
-						float cx = BasicSize * 1.1 + ThumbSize * 0.5 + i * (ThumbSize + BasicSize * 0.15);
+						//缩略图在面板内水平排布：间距恒为 ThumbGap，起点按整组宽度居中；
+						//再叠加分组滑动偏移，形成切组的横向滑入动画
+						float cx = listStart + ThumbSize * 0.5f + i * (ThumbSize + ThumbGap) + slideX;
 						float cy = size.y.value * 0.5 + ThumbOffsetY[i].value;
+
+						//为下方的页码文字预留空间
+						cy -= tagFontSize * 0.2f;
 
 						Sprite ts(ThumbCache[i].getTexture());
 						ts.setPosition({ cx, cy });
@@ -4484,7 +4724,7 @@ public:
 						rt.draw(ts);
 
 						//当前正在查看的相册页（缩略图第 i 张对应相册页 i+1）用主色圆角外框标记
-						if (Write::Page == i + 1)
+						if (Write::Page == page)
 						{
 							XGraph::SetColor(User::MainColor);
 							XGraph::LineShape::SetLineWidth(WindowSize.x / 900);
@@ -4494,7 +4734,43 @@ public:
 								cx - boxSize * 0.5f, cy - boxSize * 0.5f,
 								boxSize, boxSize, RoundSize / 4, rt);
 						}
+
+						//缩略图下方输出页码文字：白色，透明度与字号都跟随该缩略图的缩放进度，
+						//避免浮现动画中文字先于缩略图完全显形而显得突兀
+						{
+							int tagAlpha = (int)(min(1.f, max(0.f, SubScale)) * 255);
+							int tagDrawSize = max(1, FONTSIZE * SubScale);
+
+							XText::SetFontColor(Color(255, 255, 255, tagAlpha));
+							//字号已按缩放收缩，用 TOP 对齐让文字始终紧贴缩略图下沿
+							XText::SetFontAdjust(ADJUST_CENTER, ADJUST_TOP);
+							XText::SetFontSize(tagDrawSize);
+
+							//文字纵向位置：缩略图下沿 + 半个行高的留白，形成稳定下边距
+							float tagY = cy + ThumbSize * SubScale * 0.5f + tagFontSize * 0.28f;
+
+							XText::Xyprintf(cx, tagY, L"第" + to_wstring(page) + L"张", rt);
+						}
 					}
+				}
+
+				//左右分组切换按钮（常驻显示，仅颜色区分可用状态）
+				{
+					//按钮与缩略图同一水平中线
+					float cy = size.y.value * 0.5;
+
+					XText::SetFontSize(FONTSIZE * 2);
+					XText::SetFontAdjust(ADJUST_CENTER, ADJUST_CENTER);
+					//左
+					if (HasPrevGroup()) XText::SetFontColor(Color::White);
+					else XText::SetFontColor(Color(150,150,150));
+					float cx_left = ArrowZoneWidth() / 2;
+					XText::Xyprintf(cx_left, cy, L"<", rt);
+					//右
+					if (HasNextGroup()) XText::SetFontColor(Color::White);
+					else XText::SetFontColor(Color(150, 150, 150));
+					float cx_right = ArrowZoneWidth() / 2;
+					XText::Xyprintf(size.x.value - cx_right, cy, L">", rt);
 				}
 
 				rt.display();
@@ -4525,14 +4801,27 @@ public:
 		{
 			if (IsEx && photoCount > 0)
 			{
-				//与绘制保持一致：缩略图放大约 30%，热区随实际绘制尺寸同步
-				static int ThumbSize = BasicSize * 0.9 * 1.3;
+				//与绘制保持一致：缩略图尺寸必须与绘制阶段完全相同，否则热区与图形错位
+				static int ThumbSize = BasicSize * 0.9 * 1.25;
+
+				//与 Draw 中完全相同的布局参数，保证热区与图形严格对齐
+				static float ThumbGap = BasicSize * 0.12;
+
+				//与绘制阶段一致：整组缩略图水平居中，热区必须用同一公式，否则点击会与图形错位
+				float listWidth = photoCount * ThumbSize + (photoCount - 1) * ThumbGap;
+				float listStart = (size.x.value - listWidth) * 0.5f;
+
+				//与绘制阶段一致：缩略图为留出页码文字而上移了半个文字行高
+				float tagFontSize = max(1, (int)(FONTSIZE * 1.15f));
+
+				//与绘制阶段一致：分组切换滑动中缩略图整体偏移，热区必须跟随，否则动画期间点不中
+				float slideX = GroupSlide.value;
 
 				for (int i = 0; i < photoCount; i++)
 				{
 					//与绘制时一致：cx / cy 为缩略图“中心”坐标（绘制时以 0.5,0.5 为原点）
-					float cx = BasicSize * 1.1 + ThumbSize * 0.5 + i * (ThumbSize + BasicSize * 0.15);
-					float cy = size.y.value * 0.5;
+					float cx = listStart + ThumbSize * 0.5f + i * (ThumbSize + ThumbGap) + slideX;
+					float cy = size.y.value * 0.5f - tagFontSize * 0.5f;
 
 					//IsMouseIn 接收的是左上角，故由中心坐标换算左上角
 					if (XMsg::MouseMsg::IsMouseIn(
@@ -4540,9 +4829,25 @@ public:
 						pos.y.value - 1 + cy - ThumbSize * 0.5f,
 						(float)ThumbSize, (float)ThumbSize))
 					{
-						ChoosePage(i + 1);
+						//换算到本组对应的真实相册页码
+						ChoosePage(PageGroup * MAX_THUMB + i + 1);
 						break;
 					}
+				}
+			}
+
+			//左右分组切换按钮（常驻，与绘制尺寸保持一致）
+			if (IsEx && !pos.y.IsAnimation())
+			{
+				if (XMsg::MouseMsg::IsMouseIn(pos.x.value, pos.y.value, ArrowZoneWidth(), size.y.value)
+					&& HasPrevGroup())
+				{
+					SwitchGroup(-1);
+				}
+				if (XMsg::MouseMsg::IsMouseIn(pos.x.value + size.x.value - ArrowZoneWidth(), pos.y.value, ArrowZoneWidth(), size.y.value)
+					&& HasNextGroup())
+				{
+					SwitchGroup(1);
 				}
 			}
 		}
@@ -4579,9 +4884,10 @@ public:
 			if (photoCount > MAX_THUMB) photoCount = MAX_THUMB;
 
 			//水平居中、从底部弹出
-			size.x.SetAnimation(BasicSize * 11 + UISpace, TotalFrame);
+			//面板宽度需容纳：左右按钮区 + 6 张缩略图 + 内部间距，
+			//宽度不足时右按钮会被 rt 边界裁掉（表现为 < > 只有一边或不显示）
+			size.x.SetAnimation(PreviewWidth(), TotalFrame);
 			size.y.SetAnimation(BasicSize * 1.5, TotalFrame);
-			pos.x.SetAnimation(WindowSize.x / 2 - BasicSize * 6, TotalFrame);
 			pos.y.SetAnimation(WindowSize.y - UISpace * 2 - BasicSize * 1.4 - BasicSize, TotalFrame);
 
 			//展开缩放动画
@@ -4600,8 +4906,6 @@ public:
 		}
 		else
 		{
-			//收起：缩回底部
-			pos.x.SetAnimation(WindowSize.x / 2 - BasicSize * 6, TotalFrame);
 			pos.y.SetAnimation(WindowSize.y, TotalFrame);
 		}
 
@@ -4612,6 +4916,11 @@ public:
 		NeedReDraw = true;
 	}
 };
+
+//CameraPreview 静态常量成员定义：值依赖运行期全局 BasicSize，故只能在此处（BasicSize 已初始化后）求值
+const float CameraPreview::ArrowSizeAll = BasicSize * 0.42f;
+const float CameraPreview::ArrowPadAll = BasicSize * 0.12f;
+
 static CameraPreview CameraPreviewToolBar;
 
 void Tool::ShowPhotoWindow()
@@ -4654,8 +4963,8 @@ class TagBox_Camera
 			MainToolBarTempX = MainToolBar.pos.x.value;
 			ToolPosTempX = pos.x.value;
 
-			MainToolBar.pos.x.SetAnimation(MainToolBarTempX - BasicSize * 3,TotalFrame);
-			pos.x.SetAnimation(ToolPosTempX - BasicSize * 3, TotalFrame);
+			MainToolBar.pos.x.SetAnimation(MainToolBarTempX - BasicSize * 2.5,TotalFrame);
+			pos.x.SetAnimation(ToolPosTempX - BasicSize * 2.5, TotalFrame);
 
 			for (int i = 0;i < 5;i++)
 			{

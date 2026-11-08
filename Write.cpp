@@ -4208,11 +4208,13 @@ void DrawNowLayer(RenderTarget& window)
 }
 
 //绘制图片层
+int EditClock = 0;
+bool IsEditing = false;
 static int SkipImageIndex = -1;
 void EditImage(int i, RenWin& window);
 void DrawImageLayer(RenWin& window)
 {
-
+	if (EditClock > 0) EditClock -= 1;
 	auto& pd = GetCurPage();
 
 	static Vector2i CamPosTemp;
@@ -4249,32 +4251,39 @@ void DrawImageLayer(RenWin& window)
 		FlushImageLayer = false;
 	}
 
-	if(!WriteCamera::EnableWriteCamera)
+	if(EditClock == 0 && !IsEditing)
 	{
-		if (XMsg::MouseMsg::IsMouseDown(VK::MouseRight))
+		if (!WriteCamera::EnableWriteCamera)
 		{
-			float scale = pd.Scale / 100.0f;
-			//循环不变量提到循环外
-			float camScaleX = pd.CameraPos.x * scale;
-			float camScaleY = pd.CameraPos.y * scale;
-			int imageCount = (int)pd.Images.size();
-			for (int i = 0; i < imageCount; i++)
+			if (XMsg::MouseMsg::IsMouseDown(VK::MouseLeft) && Tool::ToolCount == 2)
 			{
-				auto& img = pd.Images[i];
-
-				float sx = img.pos.x * scale + camScaleX;
-				float sy = img.pos.y * scale + camScaleY;
-				float sw = img.w * scale;
-				float sh = img.h * scale;
-
-				if (sx - sw / 2 < -sw || sy - sh / 2 < -sh || sx > WindowSize.x || sy > WindowSize.y) continue;
-
-				if (XMsg::MouseMsg::IsMouseIn(sx - sw / 2, sy - sh / 2, sw, sh))
+				float scale = pd.Scale / 100.0f;
+				//循环不变量提到循环外
+				float camScaleX = pd.CameraPos.x * scale;
+				float camScaleY = pd.CameraPos.y * scale;
+				int imageCount = (int)pd.Images.size();
+				for (int i = 0; i < imageCount; i++)
 				{
-					SkipImageIndex = i;
-					EditImage(i, window);
-					SkipImageIndex = -1;
-					break;
+					if (i == SkipImageIndex) continue;
+
+					auto& img = pd.Images[i];
+
+					float sx = img.pos.x * scale + camScaleX;
+					float sy = img.pos.y * scale + camScaleY;
+					float sw = img.w * scale;
+					float sh = img.h * scale;
+
+					if (sx - sw / 2 < -sw || sy - sh / 2 < -sh || sx > WindowSize.x || sy > WindowSize.y) continue;
+
+					if (XMsg::MouseMsg::IsMouseIn(sx - sw / 2, sy - sh / 2, sw, sh))
+					{
+						SkipImageIndex = i;
+						IsEditing = true;
+						EditImage(i, window);
+						IsEditing = false;
+						SkipImageIndex = -1;
+						break;
+					}
 				}
 			}
 		}
@@ -4293,7 +4302,7 @@ void DrawImageLayer(RenWin& window)
 
 bool StraightenWriteData(
 	vector<WriteData>& WriteDataTemp,
-	float tolerance = 14.0f * ScreenScale,
+	float tolerance = 8.0f * ScreenScale,
 	float minLength = 200.f * 100.0 / GetCurPage().Scale)
 {
 	size_t N = WriteDataTemp.size();
@@ -4835,8 +4844,7 @@ void WriteSub(RenWin& window)
 
 			if (PenW > Tool::PenSize / 2 && Tool::PenCap == 0)
 			{				
-				if (!WriteCamera::EnableWriteCamera) PenW -= 0.6;
-				else PenW -= 0.2;
+				PenW -= 0.6;
 			}
 
 			// 线宽按缩放比例存
@@ -5017,7 +5025,7 @@ void MoveCamera()
 	}
 
 	//移动
-	if ((Tool::ToolCount == 2 && (TouchNum == 1 || XMsg::KeyMsg::Keystate(VK::MouseLeft))) || (Tool::ToolCount != 2 && TouchNum >= 2 && TouchNum <= 5))
+	if ((Tool::ToolCount == 3 && (TouchNum == 1 || XMsg::KeyMsg::Keystate(VK::MouseLeft))) || (Tool::ToolCount != 2 && TouchNum >= 2 && TouchNum <= 5))
 	{
 		WriteStopTime = 15;
 		if (MoveSleepTime == 0)
@@ -5070,7 +5078,7 @@ void MoveCamera()
 	int wheel = XMsg::MouseMsg::GetMouseWheel();
 
 	//缩放
-	if (Tool::ToolCount == 2 || wheel != 0)
+	if (Tool::ToolCount == 3 || wheel != 0)
 	{
 		if (wheel != 0)
 		{
@@ -5674,15 +5682,15 @@ bool ImageManager::AddImage(wstring path,RenWin& window)
 
 		img.h = img.img.h, img.w = img.img.w;
 
-		if (img.h > WindowSize.y * 0.7)
-		{
-			img.w = img.img.w * WindowSize.y * 0.7 / img.h;
-			img.h = WindowSize.y * 0.7;
-		}
 		if (img.w > WindowSize.x * 0.7)
 		{
 			img.h = img.img.h * WindowSize.x * 0.7 / img.w;
 			img.w = WindowSize.x * 0.7;
+		}
+		else if (img.h > WindowSize.y * 0.7)
+		{
+			img.w = img.img.w * WindowSize.y * 0.7 / img.h;
+			img.h = WindowSize.y * 0.7;
 		}
 
 		static int RoundSize = WindowSize.x / 150;
@@ -5696,16 +5704,18 @@ bool ImageManager::AddImage(wstring path,RenWin& window)
 		static Vector2i EnsureBarSize = {WindowSize.x / 15,WindowSize.y / 22};
 		static int Space = WindowSize.x / 100;
 
+		IsEditing = true;
 		while (!XMsg::IsClose(window))
 		{
 			XWindow::DelayFps(window,60);
 			
+			//绘制图片层
+			DrawImageLayer(window);
 			//绘制之前书写
 			DrawLayer(window);
 			//绘制荧光层
 			DrawLightLayer(window);
-			//绘制图片层
-			DrawImageLayer(window);
+			
 
 			Clamp(Pos.x, WindowSize.x * 0.1, WindowSize.x * 0.9);
 			Clamp(Pos.y, WindowSize.y * 0.1, WindowSize.y * 0.9);
@@ -5778,6 +5788,8 @@ bool ImageManager::AddImage(wstring path,RenWin& window)
 						Pos.y -= MoveBasicSize;
 						GetCurPage().CameraPos.y -= MoveBasicSize;
 					}
+
+					FlushImageLayer = FlushWriteLayer = true;
 				}
 				else if(XMsg::MouseMsg::IsMouseIn(Pos.x - img.w / 2 - img.w * 0.1, Pos.y - img.h / 2 - img.h * 0.1, img.w * 1.2, img.h * 1.2))
 				{
@@ -5891,10 +5903,15 @@ bool ImageManager::AddImage(wstring path,RenWin& window)
 			}
 		}
 
-		SkipImageIndex = -1;
-		return true;
+		FlushImageLayer = FlushWriteLayer = true;
 
+		SkipImageIndex = -1;
+
+		IsEditing = false;
+
+		XMsg::ClearMsg();
 		XMsg::SetSleepTime(10);
+		return true;
 	}
 }
 
@@ -5972,20 +5989,46 @@ Vector2i FocusCameraOn(Vector2i target)
 	return result;
 }
 
+//缩放
+Vector2i ClampVector2i(int x, int y, int MaxX, int MaxY, bool Lock)
+{
+	// 先钳制到 [0, Max]
+	int cx = max(0, min(x, MaxX));
+	int cy = max(0, min(y, MaxY));
+
+	if (Lock && (cx != 0 || cy != 0))
+	{
+		// 保持原始比例，用较小的缩放系数
+		double scaleX = (MaxX > 0) ? static_cast<double>(cx) / MaxX : 0.0;
+		double scaleY = (MaxY > 0) ? static_cast<double>(cy) / MaxY : 0.0;
+		double scale = max(scaleX, scaleY); // 取较大需求 -> 缩小
+
+		if (scale > 1.0)
+		{
+			cx = static_cast<int>(cx / scale);
+			cy = static_cast<int>(cy / scale);
+		}
+	}
+
+	return { cx, cy };
+}
+
 void EditImage(int i, RenWin& window)
 {
+	EditClock = 30;
+
 	ImageStruct& img = GetCurPage().Images[i];
 	Vector2i Pos = { WindowSize.x / 2,WindowSize.y / 2 };
 
-	if (img.h > WindowSize.y * 0.7)
-	{
-		img.w = img.img.w * WindowSize.y * 0.7 / img.h;
-		img.h = WindowSize.y * 0.7;
-	}
 	if (img.w > WindowSize.x * 0.7)
 	{
 		img.h = img.img.h * WindowSize.x * 0.7 / img.w;
 		img.w = WindowSize.x * 0.7;
+	}
+	else if (img.h > WindowSize.y * 0.7)
+	{
+		img.w = img.img.w * WindowSize.y * 0.7 / img.h;
+		img.h = WindowSize.y * 0.7;
 	}
 
 	static int RoundSize = WindowSize.x / 150;
@@ -6005,14 +6048,15 @@ void EditImage(int i, RenWin& window)
 
 	while (!XMsg::IsClose(window))
 	{
-		XWindow::DelayFps(window,60);
+		XWindow::DelayFps(window, 60);
 
+		//绘制图片层
+		DrawImageLayer(window);
 		//绘制之前书写
 		DrawLayer(window);
 		//绘制荧光层
 		DrawLightLayer(window);
-		//绘制图片层
-		DrawImageLayer(window);
+		
 
 		Clamp(Pos.x, WindowSize.x * 0.1, WindowSize.x * 0.9);
 		Clamp(Pos.y, WindowSize.y * 0.1, WindowSize.y * 0.9);
@@ -6085,6 +6129,8 @@ void EditImage(int i, RenWin& window)
 					Pos.y -= MoveBasicSize;
 					GetCurPage().CameraPos.y -= MoveBasicSize;
 				}
+
+				FlushWriteLayer = FlushImageLayer = true;
 			}
 			else if (XMsg::MouseMsg::IsMouseIn(Pos.x - img.w / 2 - img.w * 0.1, Pos.y - img.h / 2 - img.h * 0.1, img.w * 1.2, img.h * 1.2))
 			{

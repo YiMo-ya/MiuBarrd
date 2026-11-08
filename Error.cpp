@@ -45,10 +45,7 @@ void Error::ShowError(RenWin& window, std::vector<std::wstring> Discription, wst
 		if (RestartClock < 0) break;
 	}
 
-	if(XFile::Exists(L"Fix.exe"))
-	{
-		ShellExecuteW(NULL, L"open", L"Fix.exe", NULL, NULL, NULL);
-	}
+	ShellExecuteW(NULL, L"open", L"MiuBarrd.exe", NULL, NULL, NULL);
 
 	exit(-1);
 }
