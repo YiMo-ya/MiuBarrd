@@ -7272,7 +7272,7 @@ EV StartScale;
 
 void WriteCamera::Start()
 {
-	static int InitW = WindowSize.y * 0.8,InitH = WindowSize.x * 0.8;
+	static int InitW = WindowSize.x,InitH = WindowSize.y;
 
 	int DI = 0;
 	ifstream DeviceIndex("DeviceIndex.ini");

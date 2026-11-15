@@ -83,6 +83,19 @@ wstring GetFileExtension(const wstring& path)
 	return path.substr(dot + 1);
 }
 
+inline wstring GetDirOfFile(const wstring& filePath)
+{
+	std::error_code ec;
+	filesystem::path p = filesystem::absolute(filesystem::path(filePath), ec);
+
+	// parent_path 不含末尾分隔符，自己补上
+	std::wstring dir = p.parent_path().wstring();
+	if (!dir.empty() && dir.back() != L'\\' && dir.back() != L'/')
+		dir += L'\\';
+
+	return dir;
+}
+
 //圆角化RenderTexture
 #pragma region MyRegion
 
@@ -2696,9 +2709,7 @@ class ExtBar
 		{
 			if (XFile::Exists(path))
 			{
-				ShellExecuteW(NULL, L"open", path.c_str(), NULL, NULL, SW_SHOW);
-
-				BottomMessage::AddMessage(106, L"已加载：" + name + L"插件", BottomMessageType_SUCCESS, 180);
+				ShellExecuteW(NULL, L"open", path.c_str(), NULL, GetDirOfFile(path).c_str(), SW_SHOW);
 			}
 			else
 			{
@@ -2769,6 +2780,7 @@ public:
 				{
 					IMGPATH = XString::Convert::wstring_to_utf8(ExtLoads[i].wstring() + L"\\" + XString::Convert::utf8_to_wstring(IMGPATH));
 				}
+				PATH = XString::Convert::wstring_to_utf8(ExtLoads[i].wstring() + L"\\" + XString::Convert::utf8_to_wstring(PATH));
 
 				exts.emplace_back();
 
@@ -4215,6 +4227,10 @@ class CameraPreview
 	RenderTexture rt;
 	bool init = false;
 
+	//缩略图数量上限
+	//每组最多 6 张：数量减少后单张可放大，同时为左右切换按钮留出足够空间
+	static const int MAX_THUMB = 9;
+
 	//缩略图重绘脏标记
 	bool NeedReDraw = true;
 
@@ -4223,14 +4239,14 @@ class CameraPreview
 	//缩略图源图是否已绘制到缓存纹理（避免每帧重复 clear/draw/display）
 	vector<bool> ThumbDrawn;
 	//缩略图上次绘制时使用的旋转角，用于判断旋转变化后需重建
-	int LastRote[12] = { 0 };
+	int LastRote[MAX_THUMB] = { 0 };
 	//缩略图上次绘制时对应的相册页码：拍照后组内页码会整体平移，必须记录才能发现源图已被替换
-	int LastPage[12] = { 0 };
+	int LastPage[MAX_THUMB] = { 0 };
 	//缩略图上次绘制时源图像的宽高：同页码被新照片覆盖时，尺寸也可能变化
-	int LastPhotoW[12] = { 0 };
-	int LastPhotoH[12] = { 0 };
-	EV ThumbScale[12];
-	EV ThumbOffsetY[12];
+	int LastPhotoW[MAX_THUMB] = { 0 };
+	int LastPhotoH[MAX_THUMB] = { 0 };
+	EV ThumbScale[MAX_THUMB];
+	EV ThumbOffsetY[MAX_THUMB];
 
 	//分组切换时整组缩略图的横向滑动偏移（像素）：切换瞬间设为起始偏移，随后缓动回 0
 	EV GroupSlide;
@@ -4238,17 +4254,13 @@ class CameraPreview
 	//面板内容缩放
 	EV xScale;
 
-	//缩略图数量上限
-	//每组最多 6 张：数量减少后单张可放大，同时为左右切换按钮留出足够空间
-	static const int MAX_THUMB = 9;
-
 	//左右切换按钮的图形尺寸与边距（绘制与点击热区共用，保证两者几何完全一致）
 	//注意：BasicSize 是运行期全局变量，不能用 constexpr 初始化（常量表达式要求编译期可求值），
 	//因此这里用 static const，类内静态成员此处仅作声明，定义放在类外
 	static const float ArrowSizeAll;
 	static const float ArrowPadAll;
 
-	//当前预览的缩略图分组（每 6 张一组，0 表示第一组）
+	//当前预览的缩略图分组（每 9 张一组，0 表示第一组）
 	int PageGroup = 0;
 
 	//本组第一张缩略图在相册中的页码（从 1 开始）
@@ -4270,20 +4282,26 @@ class CameraPreview
 		return groups < 1 ? 1 : groups;
 	}
 
-	//本组实际显示的缩略图数量
-	int GroupPhotoCount() const
-	{
-		int total = TotalPhoto();
-		int start = PageGroup * MAX_THUMB;
-		if (start >= total) return 0;
-
-		int remain = total - start;
-		return remain > MAX_THUMB ? MAX_THUMB : remain;
-	}
-
 	//是否存在上一组 / 下一组
 	bool HasPrevGroup() const { return PageGroup > 0; }
 	bool HasNextGroup() const { return PageGroup + 1 < GroupCount(); }
+
+	//本组实际显示的缩略图数量
+	int GroupPhotoCount() const
+	{
+		if(!HasNextGroup())
+		{
+			int total = TotalPhoto();
+			int ReturnValue = total % MAX_THUMB;
+			if (ReturnValue <= 0 && total != 0) ReturnValue = MAX_THUMB;
+			return ReturnValue;
+		}
+		else
+		{
+			int total = TotalPhoto();
+			return min(total,MAX_THUMB);
+		}
+	}
 
 	//缩略图尺寸：高度略小于面板高度，保证上下留白均匀（绘制与热区共用同一值）
 	static int ThumbPixel()
@@ -4332,7 +4350,7 @@ class CameraPreview
 		ThumbDrawn.assign(count, false);
 
 		//旋转角、页码、源图尺寸记录全部清零，任何一项不同都会触发重建
-		for (int i = 0; i < 12; i++)
+		for (int i = 0; i < MAX_THUMB; i++)
 		{
 			LastRote[i] = 0;
 			LastPage[i] = 0;
@@ -4377,7 +4395,7 @@ class CameraPreview
 		PageGroup = target;
 
 		//换组后所有缩略图动画状态清零，避免残留旧组的缓动进度
-		for (int i = 0; i < 12; i++)
+		for (int i = 0; i < MAX_THUMB; i++)
 		{
 			ThumbScale[i].SetAnimationStartValue(100);
 			ThumbScale[i].SetAnimation(100, 1);
@@ -4581,14 +4599,12 @@ public:
 		//重建缩略图缓存（张数变化时）
 		if ((int)ThumbCache.size() != photoCount)
 		{
-			int StartIndex = (int)ThumbCache.size();
+			// 旧张数必须在 clear 之前保存（clear 之后失效）
 			ThumbCache.clear();
 			ThumbCache.resize(photoCount);
 
-			//缩略图数量变化后，源图缓存与旋转角记录必须一并失效，
-			//否则新页会复用旧页的旋转角判断，导致方向错误或源图不刷新。
 			ThumbDrawn.assign(photoCount, false);
-			for (int i = 0; i < 12; i++)
+			for (int i = 0; i < MAX_THUMB; i++)
 			{
 				LastRote[i] = 0;
 				LastPage[i] = 0;
@@ -4596,13 +4612,25 @@ public:
 				LastPhotoH[i] = 0;
 			}
 
-			for (int i = StartIndex; i < photoCount; i++)
+			for (int i = 0; i < MAX_THUMB; i++)
 			{
-				ThumbScale[i].SetAnimationStartValue(0);
-				ThumbScale[i].SetAnimation(100, TotalFrame);
+				if (i < photoCount)
+				{
+					if (ThumbScale[i].value < 100 && !ThumbScale[i].IsAnimation())
+					{
+						ThumbScale[i].SetAnimationStartValue(0);
+						ThumbScale[i].SetAnimation(100, TotalFrame);
 
-				ThumbOffsetY[i].SetAnimationStartValue(BasicSize / 2);
-				ThumbOffsetY[i].SetAnimation(0, TotalFrame);
+						ThumbOffsetY[i].SetAnimationStartValue(BasicSize / 2);
+						ThumbOffsetY[i].SetAnimation(0, TotalFrame);
+					}
+				}
+				else
+				{
+					// 超出本组张数的索引必须清零，否则下次张数增加时会以 0 缩放绘制
+					ThumbScale[i].SetAnimationStartValue(0);
+					ThumbOffsetY[i].SetAnimationStartValue(0);
+				}
 			}
 
 			NeedReDraw = true;
@@ -4809,7 +4837,7 @@ public:
 
 				//与绘制阶段一致：整组缩略图水平居中，热区必须用同一公式，否则点击会与图形错位
 				float listWidth = photoCount * ThumbSize + (photoCount - 1) * ThumbGap;
-				float listStart = (size.x.value - listWidth) * 0.5f;
+				float listStart = ArrowZoneWidth();
 
 				//与绘制阶段一致：缩略图为留出页码文字而上移了半个文字行高
 				float tagFontSize = max(1, (int)(FONTSIZE * 1.15f));

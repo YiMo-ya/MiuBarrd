@@ -578,7 +578,7 @@ void CameraManager::DrawCameraImage(int x, int y, float Scale, sf::RenderWindow&
     if (SleepUpdateTime <= 0) Cam.update(tex.texture);
     else SleepUpdateTime -= 1;
 
-    tex.color = Color(220, 220, 220);
+    tex.color = Color::White;
 
     xs::XImage::PutRoteScaleImage(tex, x, y, Rotation.value, Scale, Scale, window, 0.5, 0.5);
 }

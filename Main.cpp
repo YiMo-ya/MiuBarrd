@@ -276,32 +276,6 @@ void StartAnimation(int PosStartX,int PosStartY,int SizeStartX,int SizeStartY, R
 	}
 }
 
-void ShowTime(RenWin& window)
-{
-	static int clock = 0;
-
-	XText::SetFontAdjust(ADJUST_RIGHT, ADJUST_TOP);
-	static wstring text = to_string(XTime::GetTimeNow_Hour()) + L" : " + to_string(XTime::GetTimeNow_Min());
-	if (clock < 300) clock += 1;
-	else
-	{
-		int h = XTime::GetTimeNow_Hour(), m = XTime::GetTimeNow_Min();
-		wstring Hs = to_wstring(h);
-		wstring Ms;
-		if (m > 9) Ms = to_wstring(m);
-		else Ms = L"0" + to_wstring(m);
-
-		text = Hs + L" : " + Ms;
-		clock = 0;
-	}
-
-	static int FS = FONTSIZE * 2;
-	XText::SetFontConfig(User::MainColor, FS);
-	
-	static int x = WindowSize.x * 0.99, y = WindowSize.y * 0.02;
-	XText::Xyprintf(x, y, text,window);
-}
-
 //主逻辑
 void App(RenWin& window)
 {
@@ -344,14 +318,24 @@ void App(RenWin& window)
 		//书写逻辑
 		Write::WriteT(window);
 		
-		if(Tool::CanDeath)
+		if(Tool::CanDeath && !XWindow::IsFocus(window))
 		{
+			XSystem::Taskbar::SetTaskBarVisible(true);
+
+			XWindow::SetTitle(window, L"MiuBack");
+
 			while (!XWindow::IsFocus(window))
 			{
 				XMsg::UpdateMsg(window);
 				::Sleep(10);
-				XSystem::Taskbar::SetTaskBarVisible(true);
+				
+				if (IsWindow(FindWindowW(NULL, L"MiuBarrd")))
+				{
+					exit(0);
+				}
 			}
+
+			XWindow::SetTitle(window, L"MiuBarrd");
 		}
 
 		if (UpdateUser > 0) UpdateUser -= 1;
@@ -428,37 +412,18 @@ static bool SetForeWindow(HWND hWnd)
 	return true;
 }
 
-//只允许一个实例
-bool single_instance() {
-	static HANDLE h = CreateMutexA(nullptr, FALSE, "Global\\MiuBarrd_SingleInstance");
-	return h != nullptr && GetLastError() != ERROR_ALREADY_EXISTS;
-}
-
 int main()
 {
-	if (!single_instance())
-	{
-		//打开检测
-		HWND hwnd = FindWindowW(NULL, L"MiuBarrd");
-		if (IsWindow(hwnd))
-		{
-			SetForeWindow(hwnd);
-			exit(0);
-		}
-	}
-
 	XWindow::SetDPIAware();
+
+	if (IsWindow(FindWindowW(NULL, L"MiuBarrd")))
+	{
+		SetForeWindow(FindWindowW(NULL, L"MiuBarrd"));
+		exit(0);
+	}
 
 	ScreenSize = XSystem::Info::GetScreenSize();
 	ScreenScale = ScreenSize.y / 1080.0;
-
-	//打开检测
-	HWND hwnd = FindWindowW(NULL, L"MiuBarrd");
-	if (IsWindow(hwnd))
-	{
-		SetForeWindow(hwnd);
-		exit(0);
-	}
 
 	//创建窗口
 	int wx = ScreenSize.x / 2.5, wy = ScreenSize.y / 2.5;
@@ -472,7 +437,6 @@ int main()
 	XBatch::SetBatchType(BATCH_HANDLED);
 
 	User::Read();
-	
 
 	//设置图标
 	XWindow::SetIcon(MainWindow, ImgPath + L"Icon.dll");
