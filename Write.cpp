@@ -4601,14 +4601,14 @@ bool StraightenWriteDataToCircle(
 	// ============================================================
 	// 10. 分支 1：正圆
 	// ============================================================
-	if (ecc < 0.35f) {
+	if (ecc < 0.7f) {
 		float tol = meanR * toleranceRatio;
 		int outliers = 0;
 		for (size_t i = 0; i < N; ++i) {
 			float dx = px[i] - cx, dy = py[i] - cy;
 			if (fabsf(sqrtf(dx * dx + dy * dy) - meanR) > tol) ++outliers;
 		}
-		if (outliers > (int)(N * 0.22f)) return false;
+		if (outliers > (int)(N * 0.32f)) return false;
 
 		for (size_t i = 0; i < N; ++i) {
 			WriteData& d = WriteDataTemp[i];
@@ -4644,7 +4644,7 @@ bool StraightenWriteDataToCircle(
 	// 11. 分支 2：椭圆
 	// ============================================================
 	else {
-		if (halfB < meanR * 0.12f) return false;
+		if (halfB < meanR * 0.16f) return false;
 		if (!(halfA > 1e-2f) || !(halfB > 1e-2f)) return false;
 		if (!isfinite(halfA) || !isfinite(halfB)) return false;
 
@@ -4657,7 +4657,7 @@ bool StraightenWriteDataToCircle(
 			float rNorm = sqrtf((a * a) / (halfA * halfA) + (b * b) / (halfB * halfB));
 			if (fabsf(rNorm - 1.f) > tol) ++outliers;
 		}
-		if (outliers > (int)(N * 0.22f)) return false;
+		if (outliers > (int)(N * 0.32f)) return false;
 
 		for (size_t i = 0; i < N; ++i) {
 			WriteData& d = WriteDataTemp[i];
@@ -5498,17 +5498,6 @@ void Write::GoToPage(int page)
 	if (page == Page) return;
 
 	Page = page;
-
-	if (BottomMessage::IsMessageNow(105))
-	{
-		BottomMessage::UpdateCurrentMessageText(L"第" + to_wstring(Page + 1) + L"页");
-		BottomMessage::ResetY();
-		BottomMessage::UpdateCurretnMessageTime(180);
-	}
-	else
-	{
-		BottomMessage::AddMessage(105, L"第" + to_wstring(Page + 1) + L"页", BottomMessageType_INFO, 180);
-	}
 
 	FrontAlpha = 255;
 	FlushImageLayer = FlushWriteLayer = true;
@@ -7367,7 +7356,7 @@ EV StartScale;
 
 void WriteCamera::Start()
 {
-	static int InitW = WindowSize.x,InitH = WindowSize.y;
+	static int InitW = WindowSize.x,InitH = WindowSize.y * 1.2;
 
 	int DI = 0;
 	ifstream DeviceIndex("DeviceIndex.ini");
@@ -7615,6 +7604,8 @@ void WriteCamera::ManageAutoPhoto()
 		BottomMessage::AddMessage(401, L"开始自动拍照", BottomMessageType_INFO);
 
 		AutoPhotoTipY.SetAnimation(WindowSize.y * 0.65,30);
+
+		if (Write::Page > 0) Write::GoToPage(0);
 	}
 	else
 	{

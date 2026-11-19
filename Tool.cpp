@@ -4435,11 +4435,17 @@ class CameraPreview
 	//点击某张缩略图后的回调：跳转到该相册页
 	void ChoosePage(int page)
 	{
-		//相册页索引：0 为展台实时页，缩略图第 i 张对应相册页 i+1
-		Write::GoToPage(page);
-
-		//提示用户已选择
-		BottomMessage::AddMessage(203, L"已切换到第" + to_wstring(page) + L"张", BottomMessageType_SUCCESS, 180);
+		if(page != Write::Page)
+		{
+			Write::GoToPage(page);
+			//提示用户已选择
+			BottomMessage::AddMessage(203, L"第" + to_wstring(page) + L"张", BottomMessageType_SUCCESS, 180);
+		}
+		else
+		{
+			Write::GoToPage(0);
+			BottomMessage::AddMessage(203, L"返回展台", BottomMessageType_INFO, 180);
+		}
 
 		Tool::UpdatePage();
 
@@ -4717,7 +4723,7 @@ public:
 								float drawW = swap ? photo.h : photo.w;
 								float drawH = swap ? photo.w : photo.h;
 
-								float fit = min(
+								float fit = max(
 									(float)ThumbSize / drawW,
 									(float)ThumbSize / drawH);
 
@@ -4757,13 +4763,38 @@ public:
 						//当前正在查看的相册页（缩略图第 i 张对应相册页 i+1）用主色圆角外框标记
 						if (Write::Page == page)
 						{
-							XGraph::SetColor(User::MainColor);
-							XGraph::LineShape::SetLineWidth(WindowSize.x / 900);
-
 							float boxSize = ThumbSize * SubScale;
+
+							XGraph::SetFillColor(Color(0, 0, 0, 150));
+							XGraph::RectangleShape::FillRoundRect_WithoutBorder(
+								cx - boxSize * 0.5f, cy - boxSize * 0.5f,
+								boxSize, boxSize, RoundSize / 4, rt);
+
+							XGraph::SetColor(User::MainColor);
+							XGraph::LineShape::SetLineWidth(WindowSize.x / 700);
+
+							
 							XGraph::RectangleShape::RoundRect(
 								cx - boxSize * 0.5f, cy - boxSize * 0.5f,
 								boxSize, boxSize, RoundSize / 4, rt);
+
+							static IMAGE ChooseIcon;
+							static bool ChooseIconInit = false;
+							if (!ChooseIconInit)
+							{
+								XImage::NewImage(ChooseIcon, ImgPath + L"Camera\\Choose.dll");
+
+								ChooseIconInit = true;
+							}
+							static float ChooseIconScale = boxSize * 0.7 / 512.0;
+
+							XImage::PutScaleImage(ChooseIcon,cx, cy - boxSize * 0.1, ChooseIconScale, ChooseIconScale, rt, 0.5, 0.5);
+
+							static int fs = WindowSize.x / 100;
+							XText::SetFontConfig(Color::White, fs);
+							XText::SetFontAdjust(ADJUST_CENTER, ADJUST_CENTER);
+							XText::Xyprintf(cx, cy + boxSize * 0.25, L"再次点击", rt);
+							XText::Xyprintf(cx, cy + boxSize * 0.4, L"返回展台", rt);
 						}
 
 						//缩略图下方输出页码文字：白色，透明度与字号都跟随该缩略图的缩放进度，
