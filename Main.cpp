@@ -281,14 +281,13 @@ void App(RenWin& window)
 {
 	SetUnhandledExceptionFilter(GlobalExceptionHandler);
 
-	XWindow::MoveWindow(window, 0, 1);
-	XWindow::SetWindowSize(window, ScreenSize.x, ScreenSize.y - 1);
+	XWindow::MoveWindow(window, 0, 0);
+	XWindow::SetWindowSize(window, ScreenSize.x, ScreenSize.y);
 
 	XWindow::DWM::SetWindowRoundCorner(window, CORNER_NOROUND);
 	XWindow::DWM::SetWindowBackType(window, BACKTYPE_NULL);
 	XWindow::RemoveWindowExStyle(window,WS_EX_LAYERED);
-
-	SetWindowPos(window.getNativeHandle(), HWND_DESKTOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+	XWindow::DWM::ExtendIntoClientArea(window, 0, 0, 0, 0);
 
 	XWindow::SetBackGroundColor(User::BackColor);
 
@@ -301,9 +300,6 @@ void App(RenWin& window)
 	while (XMsg::IsOpen(window))
 	{
 		XWindow::DelayFps(window,60);
-
-		if(window.hasFocus()) XSystem::Taskbar::SetTaskBarVisible(false);
-		else XSystem::Taskbar::SetTaskBarVisible(true);
 
 		//绘制书写
 		Write::Show(window);
@@ -320,7 +316,6 @@ void App(RenWin& window)
 		
 		if(Tool::CanDeath && !XWindow::IsFocus(window))
 		{
-			XSystem::Taskbar::SetTaskBarVisible(true);
 
 			XWindow::SetTitle(window, L"MiuBack");
 
@@ -340,8 +335,6 @@ void App(RenWin& window)
 
 		if (UpdateUser > 0) UpdateUser -= 1;
 	}
-
-	XSystem::Taskbar::SetTaskBarVisible(true);
 }
 
 static void SetWindowClassIconFromExe(sf::Window& window, int resId = 1)
@@ -483,8 +476,6 @@ int main()
 
 	//进入主逻辑
 	App(MainWindow);
-
-	XSystem::Taskbar::SetTaskBarVisible(true);
 
 	return 0;
 }

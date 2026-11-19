@@ -740,72 +740,75 @@ void MinExe(RenWin& window)
 {
 	NeedEnterMin = false;
 
-	XWindow::SetBackGroundColor(Color::Transparent);
-
 	IMAGE temp;
 	XImage::NewImage(window, temp);
 
-	//图片缩放
-	EV ImgScale;
-	ImgScale.SetAnimationStartValue(100);
-	ImgScale.SetAnimation(65, TotalFrame);
+	//窗口缩放
+	EV WindowScale;
+	WindowScale.SetAnimationStartValue(100);
+	WindowScale.SetAnimation(10, TotalFrame / 2);
 
-	EV ImgY;
-	ImgY.SetAnimationStartValue(WindowSize.y / 2);
-	ImgY.SetAnimation(-WindowSize.y / 2);
+	EV WindowY;
+	WindowY.SetAnimationStartValue(WindowSize.y / 2);
+	WindowY.SetAnimation(-WindowSize.y / 2, TotalFrame / 2);
+
+	XWindow::DWM::SetWindowRoundCorner(window, CORNER_ROUND);
 
 	while (!XMsg::IsClose(window))
 	{
-		XWindow::DelayFps(window,60);
+		XWindow::DelayFps(window, 60);
 
-		XSystem::Taskbar::SetTaskBarVisible(true);
-		ImgScale.UpdateAnimation(XEase::EaseBasic::easeOut, 4);
-		if(!ImgScale.IsAnimation()) ImgY.UpdateAnimation(XEase::EaseBasic::easeIn, 4);
-		if (!ImgY.IsAnimation()) break;
+		if (!WindowScale.IsAnimation()) break;
 
+		WindowScale.UpdateAnimation(XEase::EaseBasic::easeInCirc);
+		float Scale = WindowScale.value / 100.0;
 
-		float Scale = ImgScale.value / 100.0;
-		XImage::PutScaleImage(temp, WindowSize.x / 2, ImgY.value, Scale, Scale, window,0.5,0.5);
+		int NewW = WindowSize.x * Scale, NewH = WindowSize.y * Scale;
 
-		XGraph::SetColor(User::MainColor);
-		static int lw = WindowSize.x / 250;
-		XGraph::LineShape::SetLineWidth(lw);
-		XGraph::RectangleShape::RoundRect(
-			WindowSize.x / 2 * (1 - Scale), ImgY.value - WindowSize.y / 2 * Scale, WindowSize.x * Scale, WindowSize.y * Scale, RoundSize,window);
+		XWindow::SetWindowSize(window, NewW,NewH);
+		XWindow::MoveWindow(window, (WindowSize.x - NewW) / 2, (WindowSize.y - NewH) * 0.9);
 	}
 
 	//最小化
-	ShowWindow(window.getNativeHandle(), SW_MINIMIZE);
+	XWindow::MinWindow(window);
 	SetForegroundWindow(GetDesktopWindow());
+	SetActiveWindow(GetDesktopWindow());
 
 	while (!XMsg::IsClose(window))
 	{
 		XWindow::DelayFps(window,30);
 
 		if (window.hasFocus())
+		{
 			break;
+		}
 	}
 
 	//还原
 	ShowWindow(window.getNativeHandle(), SW_RESTORE);
 	SetForegroundWindow(window.getNativeHandle());
 
-	ImgY.SetAnimationStartValue(-WindowSize.y);
-	ImgY.SetAnimation(0, TotalFrame * 2);
+	WindowY.SetAnimationStartValue(-WindowSize.y);
+	WindowY.SetAnimation(0, 45);
+
+	XWindow::SetWindowSize(window, WindowSize.x, WindowSize.y);
+	XWindow::DWM::SetWindowRoundCorner(window, CORNER_NOROUND);
 
 	while (!XMsg::IsClose(window))
 	{
 		XWindow::DelayFps(window,60);
 
-		XSystem::Taskbar::SetTaskBarVisible(false);
-		ImgY.UpdateAnimation(XEase::EaseBasic::easeOut, 8);
+		WindowY.UpdateAnimation(XEase::EaseBasic::easeOut, 8);
 
-		XImage::PutImage(temp, 0, ImgY.value,window);
+		XWindow::MoveWindow(window, 0, WindowY.value);
 
-		if (!ImgY.IsAnimation()) break;
+		XImage::PutImage(temp, 0, 0,window);
+
+		if (WindowY.frame > WindowY.totalframe - 20) break;
 	}
 
-	XWindow::SetBackGroundColor(User::BackColor);
+	XWindow::MoveWindow(window, 0, 0);
+	XWindow::SetWindowSize(window, ScreenSize.x, ScreenSize.y);
 }
 
 #pragma endregion
@@ -3341,7 +3344,7 @@ public:
 						XImage::PutScaleImage(Icon[i], x, y, ImgScale* IconScale[i].value / 100.0, ImgScale* IconScale[i].value / 100.0,rt, 0.5, 0.5);
 
 						//绘制文字
-						static wstring name[4] = { L"退出",L"保存板书",L"导入图片/文件",L"设置"};
+						static wstring name[4] = { L"退出",L"保存板书",L"打开图片/文件",L"设置"};
 						XText::SetFontConfig(Color(255,255,255, IconTextAlpha[i].value), FONTSIZE * 1.2);
 						XText::SetFontAdjust(ADJUST_LEFT, ADJUST_CENTER);
 						XText::Xyprintf(IconX[i].value + BasicSize * 1.2, y, name[i], rt);
@@ -4972,53 +4975,6 @@ class TagBox_Camera
 
 	int exptime = -1;
 
-	void ManageCamera(RenWin& window)
-	{
-		ENABLE_CAMERA = WriteCamera::Manage();
-		PerNeedReDraw = NeedReDraw = true;
-
-		int temp = pos.y.value;
-
-		Tool::IsInBar = true;
-
-		static int MainToolBarTempX = MainToolBar.pos.x.value;
-		static int ToolPosTempX = pos.x.value;
-
-		if (ENABLE_CAMERA)
-		{
-			size.x.SetAnimation(BasicSize * 6,TotalFrame);
-			
-			MainToolBarTempX = MainToolBar.pos.x.value;
-			ToolPosTempX = pos.x.value;
-
-			MainToolBar.pos.x.SetAnimation(MainToolBarTempX - BasicSize * 2.5,TotalFrame);
-			pos.x.SetAnimation(ToolPosTempX - BasicSize * 2.5, TotalFrame);
-
-			for (int i = 0;i < 5;i++)
-			{
-				MoreIconScale[i].SetAnimationStartValue(0);
-				MoreIconScale[i].SetAnimation(100, TotalFrame);
-
-				MoreIconOffsetY[i].SetAnimationStartValue(BasicSize / 2);
-				MoreIconOffsetY[i].SetAnimation(0, TotalFrame);
-			}
-
-			ScrollToolBar[0].Hide();
-			ScrollToolBar[1].Hide();
-		}
-		else
-		{
-			BottomMessage::SetYOffset(0);
-
-			size.x.SetAnimation(BasicSize, TotalFrame);
-			MainToolBar.pos.x.SetAnimation(MainToolBarTempX, TotalFrame);
-			pos.x.SetAnimation(ToolPosTempX, TotalFrame);
-
-			ScrollToolBar[0].Show();
-			ScrollToolBar[1].Show();
-		}
-	}
-
 	bool LoadFinish = false;
 
 	void Photo()
@@ -5061,6 +5017,53 @@ class TagBox_Camera
 	EV yScale;
 
 public:
+
+	void ManageCamera(RenWin& window)
+	{
+		ENABLE_CAMERA = WriteCamera::Manage();
+		PerNeedReDraw = NeedReDraw = true;
+
+		int temp = pos.y.value;
+
+		Tool::IsInBar = true;
+
+		static int MainToolBarTempX = MainToolBar.pos.x.value;
+		static int ToolPosTempX = pos.x.value;
+
+		if (ENABLE_CAMERA)
+		{
+			size.x.SetAnimation(BasicSize * 6, TotalFrame);
+
+			MainToolBarTempX = MainToolBar.pos.x.value;
+			ToolPosTempX = pos.x.value;
+
+			MainToolBar.pos.x.SetAnimation(MainToolBarTempX - BasicSize * 2.5, TotalFrame);
+			pos.x.SetAnimation(ToolPosTempX - BasicSize * 2.5, TotalFrame);
+
+			for (int i = 0; i < 5; i++)
+			{
+				MoreIconScale[i].SetAnimationStartValue(0);
+				MoreIconScale[i].SetAnimation(100, TotalFrame);
+
+				MoreIconOffsetY[i].SetAnimationStartValue(BasicSize / 2);
+				MoreIconOffsetY[i].SetAnimation(0, TotalFrame);
+			}
+
+			ScrollToolBar[0].Hide();
+			ScrollToolBar[1].Hide();
+		}
+		else
+		{
+			BottomMessage::SetYOffset(0);
+
+			size.x.SetAnimation(BasicSize, TotalFrame);
+			MainToolBar.pos.x.SetAnimation(MainToolBarTempX, TotalFrame);
+			pos.x.SetAnimation(ToolPosTempX, TotalFrame);
+
+			ScrollToolBar[0].Show();
+			ScrollToolBar[1].Show();
+		}
+	}
 
 	float CenterY = 1;
 
@@ -5435,6 +5438,7 @@ void Tool::Draw(RenWin& window)
 	Tool::IsInBar = false;
 
 	//初始化
+	static bool NeedOpenCamera = false;
 	static bool init = false;
 	if (!init)
 	{
@@ -5456,6 +5460,16 @@ void Tool::Draw(RenWin& window)
 		Tool::PenSize = PerSetPenSize[1];
 
 		ScrollToolBar[1].left = false;
+
+		ifstream CameraStart(L"Camera.ini");
+		if (CameraStart.is_open())
+		{
+			CameraStart.close();
+			XFile::Remove(L"Camera.ini");
+
+			NeedOpenCamera = true;
+			
+		}
 
 		init = true;
 	}
@@ -5490,7 +5504,22 @@ void Tool::Draw(RenWin& window)
 	//绘制滑动工具栏-右
 	if (StartClock < 20) ScrollToolBar[1].Draw(window);
 	//绘制固定项
-	if (StartClock <= 0) Tag_CameraToolBar.Draw(window);
+	if (StartClock <= 0)
+	{
+		Tag_CameraToolBar.Draw(window);
+
+		static int ppClock = 30;
+
+		if (ppClock == 0)
+		{
+			if (NeedOpenCamera)
+			{
+				Tag_CameraToolBar.ManageCamera(window);
+				NeedOpenCamera = false;
+			}
+		}
+		else ppClock -= 1;
+	}
 	//绘制相册照片预览（仅展台开启时可用）
 	if (StartClock <= 0 && WriteCamera::IsRun()) CameraPreviewToolBar.Draw(window);
 	

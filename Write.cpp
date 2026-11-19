@@ -498,70 +498,73 @@ void main()
 {
     vec2 p = gl_TexCoord[0].xy;
 
-    // 覆盖半径：半线宽 + AA/羽化带宽 + 1px 余量。
-    // 半径必须不小于真实绘制范围（uHalfW + AA 带宽），否则会把笔迹边缘/端点帽误剔除。
+    // ---- 安全半径：只用于早退，不参与 AA ----
     float aa0 = max(uFeather, 0.75);
     float r   = uHalfW + aa0 + 1.0;
     float r2  = r * r;
 
-    // 最终使用的「有符号距离平方」由圆角场按端点衰减得到，初值 1e18 表示尚无覆盖。
-    float d2 = 1e18;
+    float d2 = 1e20;
+    float capBlend = 0.0;   // 记录最近线段的端点混合系数
+    float tClosest = 0.0;
 
-    // 逐线段求"点到线段距离的平方"，只保留最小值。
     for (int i = 0; i < uCount; i++)
     {
         vec2 a = uSegs[i * 2];
         vec2 b = uSegs[i * 2 + 1];
 
-        // 包围盒剔除：AABB 按 r 外扩后，盒外像素到该线段的距离必然 > r，
-        // 不可能改变最终 alpha，直接跳过。判定用严格大于/小于，保证边界像素不被误剔。
+        // 粗剔除（不影响 AA，只是性能）
         vec2 lo = min(a, b) - vec2(r);
         vec2 hi = max(a, b) + vec2(r);
-        if (p.x < lo.x || p.x > hi.x || p.y < lo.y || p.y > hi.y) continue;
+        if (p.x < lo.x || p.x > hi.x || p.y < lo.y || p.y > hi.y)
+            continue;
 
         vec2 pa = p - a;
         vec2 ba = b - a;
         float denom = dot(ba, ba);
-        // 未 clamp 的投影参数 t：t<0 或 t>1 表示像素落在端点圆帽区
         float t = denom > 1e-6 ? dot(pa, ba) / denom : 0.0;
         float h = clamp(t, 0.0, 1.0);
+
         vec2 diff = pa - ba * h;
         float segD2 = dot(diff, diff);
 
-        // 端点衰减 w ∈ [0,1]：像素正对线段主体时为 1（完整线宽），
-        // 越靠近端点越接近 uCapScale（端点帽被压小），从而接缝两侧不再各自溢出整圆。
-        // hp = min(h, 1-h) 与 min(t, 1-t) 等价（t 被 clamp 后两者对称），但不必额外求 abs。
-        float hp = min(h, 1.0 - h);
-        float w  = uCapScale + (1.0 - uCapScale) * clamp(hp * uSharpness, 0.0, 1.0);
-        // 保底倒数值：w 已被 clamp 到 [uCapScale, 1]，倒数上限为 1/uCapScale；
-        // 这里用 max(w, 1e-3) 只是防止用户在常量里写 0 时出现除零。
-        float inv2 = 1.0 / max(w * w, 1e-6);
-        d2 = min(d2, segD2 * inv2);
+        // 只记录最近线段的端点信息，用于后面的圆帽修正
+        if (segD2 < d2)
+        {
+            d2 = segD2;
+            tClosest = t;
+            float hp = min(h, 1.0 - h);          // 0=端点, 0.5=中段
+            capBlend = clamp(hp * uSharpness, 0.0, 1.0);
+        }
     }
 
-    // 所有线段都被剔除（或本就离笔迹很远）时提前退出，省掉后续开方与着色混合。
-    if (d2 >= r2) discard;
+    // ---- 只有“完全不可能有像素覆盖”时才丢弃 ----
+    // 注意：这里用的是扩展半径，不会切到 AA 过渡区
+    if (d2 > r2)
+        discard;
 
-    // 只在最后对"最近的一条"开方，得到精确有向距离
+    // ---- 真实有向距离 ----
     float d = sqrt(d2);
 
-    // 有向距离 < 0 表示在笔画内部
+    // 端点圆帽修正（放在 sqrt 之后，避免污染距离场）
+    float capWidth = mix(uCapScale, 1.0, capBlend);
+    d /= max(capWidth, 1e-3);
+
+    // SDF：内部 < 0
     d -= uHalfW;
 
-    // 解析 AA 带宽
-    float aa = max(fwidth(d) * 0.7071, uFeather);
-    float a = clamp(0.5 - d / (2.0 * aa), 0.0, 1.0);
+    // ---- 稳定 AA ----
+    // fwidth 在 discard 之后仍能正确工作（discard 只在完全外部）
+    float aa = max(fwidth(d), max(uFeather, 1.0));
 
-    // Hermite 平滑
-    // a 虽然已被 clamp 到 [0,1]，但 aa 在极细笔迹或剧烈缩放时可能趋近 0，
-    // 使 d / (2*aa) 溢出、a 的浮点值不可靠，Hermite 结果 alpha 会越界。
-    // 这里把 alpha 显式限定在 [0,1]：越界会让混合被硬性截断，边缘出现亮斑或黑边，羽化失效。
-    float alpha = clamp(a * a * (3.0 - 2.0 * a), 0.0, 1.0);
+    // 标准解析覆盖
+    float alpha = smoothstep(-aa, aa, -d);
 
-    if (alpha <= 0.0) discard;
+    // Hermite 微调（可选，保留你原来的手感）
+    alpha = clamp(alpha * alpha * (3.0 - 2.0 * alpha), 0.0, 1.0);
 
-    // 乘上 gl_Color.a 与 uAlpha（荧光笔半透明）后再限定一次，
-    // 保证最终写入的片元 alpha 不超过 1，避免叠加溢出导致颜色被提亮。
+    if (alpha <= 0.001)
+        discard;
+
     float outAlpha = clamp(gl_Color.a * uAlpha * alpha, 0.0, 1.0);
     gl_FragColor = vec4(gl_Color.rgb, outAlpha);
 }
@@ -743,152 +746,6 @@ static void SDFBatchFlush(sf::RenderTarget& target, bool roundCap = false)
     g_SDFSegs.clear();
 }
 
-//贝塞尔曲线平滑
-#pragma region MyRegion
-
-// 曲线每段的三次贝塞尔细分份数上界。
-// 之所以给出上界：细分份数由相邻控制点的实际间距决定（自适应细分），
-// 但极端情况下（同一点被反复采样导致间距抖动极大）必须截断，
-// 否则单条笔迹会展开成上千条短线段，既拖慢 CPU 展开，也会撑爆 SDF 批次的线段容量。
-static const int BEZIER_MAX_SUBDIV = 16;
-
-// 相邻控制点间距小于该阈值（像素）时不再细分：细分下去也短于一个像素，
-// 徒增线段数量而画面上无任何可见差异。
-static const float BEZIER_MIN_SEG_LEN = 1.5f;
-
-// 曲线控制点最小臂长（像素）。
-// 之所以给出下限：快速书写时相邻采样点可能极其接近（甚至重合），
-// 此时 Catmull-Rom 切线长度趋近于 0，控制点退化到端点上，
-// 曲线在本段内部会先「压平」再突然拐向下一段，产生可见抖动。
-// 用该阈值兜底，保证控制点始终远离端点，曲线至少保持一段平滑的出入切线。
-static const float BEZIER_MIN_ARM = 1.f;
-
-/// <summary>
-/// 三次贝塞尔曲线求值（De Casteljau 展开式，直接代入伯恩斯坦基）。
-/// </summary>
-/// <param name="p0">起点。</param>
-/// <param name="p1">第一控制点。</param>
-/// <param name="p2">第二控制点。</param>
-/// <param name="p3">终点。</param>
-/// <param name="t">参数，取值 [0,1]。</param>
-/// <returns>曲线在 t 处的坐标。</returns>
-static Vector2f BezierEval(Vector2f p0, Vector2f p1, Vector2f p2, Vector2f p3, float t)
-{
-    float u = 1.f - t;
-    // 伯恩斯坦基：u³·p0 + 3u²t·p1 + 3ut²·p2 + t³·p3
-    // 写成 Horner 形式减少乘法次数，并保证 t=0/1 时数值上精确等于端点。
-    float uu = u * u;
-    float tt = t * t;
-
-    Vector2f res;
-    res.x = uu * u * p0.x + 3.f * uu * t * p1.x + 3.f * u * tt * p2.x + tt * t * p3.x;
-    res.y = uu * u * p0.y + 3.f * uu * t * p1.y + 3.f * u * tt * p2.y + tt * t * p3.y;
-    return res;
-}
-
-/// <summary>
-/// 按实际弧长估算三次贝塞尔曲线所需的细分数。
-/// 用「控制多边形长度」近似曲线长度（贝塞尔曲线长度恒 ≤ 控制多边形长度），
-/// 再除以最小段长得到份数；实现简单且足够精确，无需迭代求弧长。
-/// </summary>
-static int BezierSubdivCount(Vector2f p0, Vector2f p1, Vector2f p2, Vector2f p3)
-{
-    float dx1 = p1.x - p0.x, dy1 = p1.y - p0.y;
-    float dx2 = p2.x - p1.x, dy2 = p2.y - p1.y;
-    float dx3 = p3.x - p2.x, dy3 = p3.y - p2.y;
-
-    float polyLen = sqrtf(dx1 * dx1 + dy1 * dy1) +
-                    sqrtf(dx2 * dx2 + dy2 * dy2) +
-                    sqrtf(dx3 * dx3 + dy3 * dy3);
-
-    int n = (int)(polyLen / BEZIER_MIN_SEG_LEN) + 1;
-    if (n < 1) n = 1;
-    if (n > BEZIER_MAX_SUBDIV) n = BEZIER_MAX_SUBDIV;
-    return n;
-}
-
-/// <summary>
-/// 把上一段笔迹的终点与当前新笔迹用三次贝塞尔曲线平滑衔接。
-/// 
-/// 采用标准「Catmull-Rom 转贝塞尔」的参数化：四点 prev / from / to / next 决定
-/// 本段的三次贝塞尔控制点：
-///     p1 = from + (to   - prev) / 6
-///     p2 = to   - (next - from) / 6
-/// 其中 prev 是「与本段起点重合的邻点」（上一段的终点），
-/// next 是「与本段终点重合的邻点」（下一段的起点）。
-/// 这样曲线经过 from 与 to，且在连接点处切线方向与相邻段一致（C1），折线感被消除。
-/// 
-/// 之所以不直接用二次贝塞尔：二次曲线在两段衔接处只能保证 C0 连续，
-/// 快速书写时仍会看到明显的折角；三次曲线把切线也纳入控制，
-/// 更接近真实笔迹的惯性表现。
-/// </summary>
-/// <param name="from">本段笔迹起点（屏幕坐标）。</param>
-/// <param name="to">本段笔迹终点（屏幕坐标）。</param>
-/// <param name="prev">上一段的终点（与本段起点重合）；无上一段时传与 from 相同的点（退化为直线）。</param>
-/// <param name="next">下一段的起点（与本段终点重合）；无下一段时传与 to 相同的点（退化为直线）。</param>
-/// <param name="outSegs">输出：细分后折线的采样点，首元素为 from，末元素为 to。</param>
-static void BezierSmoothSegment(Vector2f from, Vector2f to, Vector2f prev, Vector2f next,
-                                vector<Vector2f>& outSegs)
-{
-    outSegs.clear();
-
-    // Catmull-Rom 切线：p1 沿「prev→to」方向、p2 沿「from→next」方向，各取 1/6 臂长。
-    // 当 prev 与本段起点重合（首段）时 (to - prev) == (to - from)，方向正确；
-    // 当 next 与本段终点重合（尾段）时 (next - from) == (to - from)，方向正确；
-    // 两种情况都退化为直线，无需额外分支处理起笔/收笔。
-    //
-    // 关键约束：本函数只做「坐标计算」，输入 from/to/prev/next 必须是调用方
-    // 已经换算好的目标坐标系（屏幕像素）坐标；输出的采样点会被直接送入绘制，
-    // 绘制阶段不得再做任何坐标变换，避免曲线被二次变换导致端点漂移与精度损失。
-    Vector2f p1(from.x + (to.x   - prev.x) / 6.f, from.y + (to.y   - prev.y) / 6.f);
-    Vector2f p2(to.x   - (next.x - from.x) / 6.f, to.y   - (next.y - from.y) / 6.f);
-
-    int n = BezierSubdivCount(from, p1, p2, to);
-
-    outSegs.reserve(n + 1);
-    for (int i = 0; i <= n; ++i)
-    {
-        float t = (float)i / (float)n;
-        outSegs.push_back(BezierEval(from, p1, p2, to, t));
-    }
-}
-
-/// <summary>
-/// 把一段笔迹的曲线采样点压入 SDF 批次。
-/// 
-/// 采样点由 WriteSub 在落笔阶段预先算好并存入 WriteData::CurvePts（世界坐标），
-/// 本函数只负责把它们换算到目标像素坐标后逐段提交，不做任何曲线求值。
-/// 调用方必须已用 SDFBatchBegin 选好颜色/线宽，本函数不修改批次参数。
-/// </summary>
-/// <param name="target">绘制目标。</param>
-/// <param name="pts">曲线采样点（世界坐标），空或单点时退化为直线。</param>
-/// <param name="from">回退起点（目标像素坐标）。</param>
-/// <param name="to">回退终点（目标像素坐标）。</param>
-/// <param name="scale">当前页面缩放系数。</param>
-/// <param name="camPos">当前相机位置（世界坐标）。</param>
-static void SDFBatchPushCurve(sf::RenderTarget& target,
-                              const vector<Vector2f>& pts,
-                              Vector2f from, Vector2f to,
-                              float scale, const Vector2i& camPos)
-{
-    // 无曲线采样点时退化为单段直线，保证起笔/收笔与未启用平滑时表现一致
-    if (pts.size() < 2)
-    {
-        SDFBatchPush(target, from.x, from.y, to.x, to.y);
-        return;
-    }
-
-    // 世界坐标 → 目标像素坐标，仅做一次线性变换，变换结果直接用于提交线段
-    for (size_t i = 0; i + 1 < pts.size(); ++i)
-    {
-        SDFBatchPush(target,
-            (pts[i].x + camPos.x) * scale, (pts[i].y + camPos.y) * scale,
-            (pts[i + 1].x + camPos.x) * scale, (pts[i + 1].y + camPos.y) * scale);
-    }
-}
-
-#pragma endregion
-
 #pragma endregion
 
 //临时层
@@ -901,51 +758,6 @@ RenderTexture WriteLayer;
 RenderTexture ImageLayer;
 //思维导图层
 RenderTexture MindMapLayer;
-
-//视觉特效
-#pragma region MyRegion
-
-struct Per
-{
-	int x, y, x2, y2;
-	Color color;
-	int a;
-};
-vector<Per> pers;
-
-//绘制特效
-void DrawPer(RenWin& window)
-{
-	if (pers.empty()) return;
-
-	// 倒序遍历：需要删除元素时直接 pop_back，避免 erase(begin+i) 造成的 O(n) 搬移
-	for (int i = (int)pers.size() - 1; i >= 0; i--)
-	{
-		auto& per = pers[i];
-
-		per.a -= 10;
-		if (per.a <= 0)
-		{
-			// 尾部元素直接弹出；中间元素与末尾交换后弹出，保持 O(1) 删除
-			pers[i] = pers.back();
-			pers.pop_back();
-			continue;
-		}
-
-		per.color.a = per.a;
-		XGraph::SetColor(per.color);
-		XGraph::LineShape::SetLineWidth(Tool::PenSize);
-		XGraph::LineShape::Line(per.x, per.y, per.x2, per.y2, window);
-	}
-}
-
-//添加特效
-void AddPer(int x, int y, int x2, int y2, Color color)
-{
-	pers.push_back({ x,y,x2,y2,color,255 });
-}
-
-#pragma endregion
 
 //思维导图
 #pragma region MyRegion
@@ -3804,24 +3616,26 @@ void DrawEraseRect(RenWin& window)
 	
 	Vector2i erasePos = XMsg::MouseMsg::GetMousePosWindow();
 
-	int ex = erasePos.x - Write::EraseSize * EraseStf / ScreenScale;
-	int ey = erasePos.y - Write::EraseSize * 1.4 * EraseStf / ScreenScale;
+	int EraseScaleSoft = EraseStf / ScreenScale;
+
+	int ex = erasePos.x - Write::EraseSize * EraseScaleSoft;
+	int ey = erasePos.y - Write::EraseSize * 1.4 * EraseScaleSoft;
 
 	static int r = WindowSize.x / 200;
 
 	XGraph::SetFillColor(Color(250, 250, 250));
-	XGraph::RectangleShape::FillRoundRect_WithoutBorder(ex, ey, Write::EraseSize * 2 * EraseStf / ScreenScale, Write::EraseSize * 2.8 * EraseStf / ScreenScale, r,window);
+	XGraph::RectangleShape::FillRoundRect_WithoutBorder(ex, ey, Write::EraseSize * 2 * EraseScaleSoft, Write::EraseSize * 2.8 * EraseScaleSoft, r,window);
 	XGraph::SetColor(Color(220, 220, 220));
 	static int lw = WindowSize.x / 130;
 	XGraph::LineShape::SetLineWidth(lw);
-	XGraph::LineShape::Line(ex + Write::EraseSize * 0.6 * EraseStf / ScreenScale,
-		ey + Write::EraseSize * 0.4 * EraseStf / ScreenScale,
-		ex + Write::EraseSize * 0.6 * EraseStf / ScreenScale, 
-		ey + Write::EraseSize * 2.4 * EraseStf / ScreenScale, window);
-	XGraph::LineShape::Line(ex + Write::EraseSize * 1.4 * EraseStf / ScreenScale, 
-		ey + Write::EraseSize * 0.4 * EraseStf / ScreenScale,
-		ex + Write::EraseSize * 1.4 * EraseStf / ScreenScale, 
-		ey + Write::EraseSize * 2.4 * EraseStf / ScreenScale, window);
+	XGraph::LineShape::Line(ex + Write::EraseSize * 0.6 * EraseScaleSoft,
+		ey + Write::EraseSize * 0.4 * EraseScaleSoft,
+		ex + Write::EraseSize * 0.6 * EraseScaleSoft,
+		ey + Write::EraseSize * 2.4 * EraseScaleSoft, window);
+	XGraph::LineShape::Line(ex + Write::EraseSize * 1.4 * EraseScaleSoft,
+		ey + Write::EraseSize * 0.4 * EraseScaleSoft,
+		ex + Write::EraseSize * 1.4 * EraseScaleSoft,
+		ey + Write::EraseSize * 2.4 * EraseScaleSoft, window);
 
 	WriteStopTime = 10;
 }
@@ -3830,6 +3644,25 @@ void DrawEraseRect(RenWin& window)
 
 //绘制
 #pragma region MyRegion
+
+static void SDFBatchPushCurve(sf::RenderTarget& target,
+	const vector<Vector2f>& pts,
+	Vector2f from, Vector2f to,
+	float scale, const Vector2i& camPos)
+{
+	if (pts.size() < 2)
+	{
+		SDFBatchPush(target, from.x, from.y, to.x, to.y);
+		return;
+	}
+
+	for (size_t i = 0; i + 1 < pts.size(); ++i)
+	{
+		SDFBatchPush(target,
+			(pts[i].x + camPos.x) * scale, (pts[i].y + camPos.y) * scale,
+			(pts[i + 1].x + camPos.x) * scale, (pts[i + 1].y + camPos.y) * scale);
+	}
+}
 
 //绘制书写层
 void DrawLayer(RenderTarget& window)
@@ -3875,12 +3708,12 @@ void DrawLayer(RenderTarget& window)
 		for (int i = 0; i < Size; ++i)
 		{
 			//抽样
-			static const int CHECKRECTBLOCK = 150;
+			static const int CHECKRECTBLOCK = 300;
 			bool NeedDraw = false;
 
 			//缓存 size()，避免循环中反复调用
 			int dataSize = (int)pd.Data[i].size();
-			int block = min(CHECKRECTBLOCK, dataSize / 4);
+			int block = min(CHECKRECTBLOCK, dataSize / 10);
 			if (block > 0)
 			{
 				for (int c = 0; c < dataSize; c += block)
@@ -4090,7 +3923,7 @@ void DrawNowLayer(RenderTarget& window)
 	static bool NeedFlushImage = false;
 	if (!WriteDataTemp.empty())
 	{
-		WriteTempLayer.clear(Color::Transparent);
+		WriteTempLayer.clear(Color(255,255,255,0));
 
 		//用 SDF 距离场绘制当前笔画：每个像素只算一次到最近线段的距离，等价"无限采样"，
 		//且整体只有一次 draw call，与笔画长度无关。
@@ -4302,230 +4135,584 @@ void DrawImageLayer(RenWin& window)
 
 bool StraightenWriteData(
 	vector<WriteData>& WriteDataTemp,
-	float tolerance = 8.0f * ScreenScale,
-	float minLength = 200.f * 100.0 / GetCurPage().Scale)
+	float tolerance = 16.0f / ScreenScale,
+	float minLength = 150.f * ScreenScale * 100.0 / GetCurPage().Scale)
 {
-	size_t N = WriteDataTemp.size();
-	// 两个采样点即可确定一条直线，因此下限放宽到 2
+	const size_t N = WriteDataTemp.size();
 	if (N < 2) return false;
 
-	float x1 = WriteDataTemp.front().x;
-	float y1 = WriteDataTemp.front().y;
-	float x2 = WriteDataTemp.back().x;
-	float y2 = WriteDataTemp.back().y;
+	// ---------- 1. 计算质心 ----------
+	float cx = 0, cy = 0;
+	for (const auto& d : WriteDataTemp) {
+		cx += d.x;
+		cy += d.y;
+	}
+	cx /= (float)N;
+	cy /= (float)N;
 
-	float dx = x2 - x1;
-	float dy = y2 - y1;
-	float segLen = hypot(dx, dy);
+	// ---------- 2. PCA 求主方向 ----------
+	float sxx = 0, syy = 0, sxy = 0;
+	for (const auto& d : WriteDataTemp) {
+		float dx = d.x - cx;
+		float dy = d.y - cy;
+		sxx += dx * dx;
+		syy += dy * dy;
+		sxy += dx * dy;
+	}
 
-	if (segLen < minLength) return false;
+	float theta = 0.5f * atan2f(2.0f * sxy, sxx - syy);
+	float dirX = cosf(theta);
+	float dirY = sinf(theta);
 
-	// 首尾几乎重合时方向向量不可用，直接放弃（避免下面投影除法的数值退化）
-	if (dx * dx + dy * dy < 1e-6f) return false;
+	// 主轴法线方向，用于计算点到主轴的有符号距离
+	float nrmX = -dirY;
+	float nrmY = dirX;
 
-	// 检查偏离
-	int outOfRangeCount = 0;
-	for (size_t k = 1; k < N - 1; ++k) {
-		float px = WriteDataTemp[k].x;
-		float py = WriteDataTemp[k].y;
-		float num = abs((y2 - y1) * px - (x2 - x1) * py + x2 * y1 - y2 * x1);
-		float den = hypot(y2 - y1, x2 - x1);
-		float dist = (den > 1e-6f) ? num / den : 0.0f;
-		if (dist > tolerance) {
-			outOfRangeCount++;
+	float axisLen = hypotf(dirX, dirY);
+	if (axisLen < 1e-6f) return false;
+
+	dirX /= axisLen;
+	dirY /= axisLen;
+	nrmX = -dirY;
+	nrmY = dirX;
+
+	// ---------- 3. 投影到主轴，计算长度 ----------
+	float minProj = 1e30f, maxProj = -1e30f;
+
+	vector<float> proj(N);
+	vector<float> dist(N);
+
+	for (size_t k = 0; k < N; ++k) {
+		const auto& d = WriteDataTemp[k];
+
+		float dx = d.x - cx;
+		float dy = d.y - cy;
+
+		proj[k] = dx * dirX + dy * dirY;
+
+		// 有符号垂直偏差：波浪判断关键
+		dist[k] = dx * nrmX + dy * nrmY;
+
+		if (proj[k] < minProj) minProj = proj[k];
+		if (proj[k] > maxProj) maxProj = proj[k];
+	}
+
+	float lineLength = maxProj - minProj;
+	if (lineLength < minLength) return false;
+
+	// ---------- 4. 距离统计（RMS + 最大偏差） ----------
+	float sumSq = 0;
+	float maxDist = 0;
+	int outlierCount = 0;
+
+	for (size_t k = 0; k < N; ++k) {
+		float ad = fabsf(dist[k]);
+
+		// 起笔/收笔容忍更宽
+		float localTol = tolerance;
+		if (k == 0 || k == N - 1) localTol *= 1.5f;
+
+		sumSq += ad * ad;
+		if (ad > maxDist) maxDist = ad;
+
+		if (ad > localTol) {
+			outlierCount++;
 		}
 	}
 
-	if (outOfRangeCount > (int)(N - 2) / 5) return false;
+	float rms = sqrtf(sumSq / (float)N);
 
-	// 两端都投影到首尾直线
-	const float denom = dx * dx + dy * dy + 1e-6f;
+	// ---------- 5. 原有综合判定 ----------
+	if (rms > tolerance * 0.6f) return false;
+	if (maxDist > tolerance * 2.5f) return false;
+	if (outlierCount > (int)(N - 2) / 6) return false;
+
+	// =========================================================
+	// ---------- 6. 新增：波浪线识别，命中则不矫正 ----------
+	// =========================================================
+
+	// 自适应尺度：不要用固定像素容差判断波浪，否则缩放一变就乱。
+	// lineLength 是当前笔迹自身长度，All 阈值都按比例走。
+	const float adaptTol = max(tolerance, lineLength * 0.015f);
+
+	// 6.1 弧长 / 弦长比
+	// 直线接近 1.0；手抖直线略大；波浪明显偏大。
+	float arcLen = 0.f;
+	for (size_t k = 1; k < N; ++k) {
+		const auto& a = WriteDataTemp[k - 1];
+		const auto& b = WriteDataTemp[k];
+
+		// 用笔宽中心线，和你的圆/椭圆处理口径一致
+		float ax = (a.x + a.x2) * 0.5f;
+		float ay = (a.y + a.y2) * 0.5f;
+		float bx = (b.x + b.x2) * 0.5f;
+		float by = (b.y + b.y2) * 0.5f;
+
+		arcLen += hypotf(bx - ax, by - ay);
+	}
+
+	float chordLen = lineLength;
+
+	if (arcLen > 1e-3f) {
+		float arcRatio = arcLen / chordLen;
+
+		// 1.12 比较稳：
+		// 直线通常 <= 1.05；
+		// 慢画手抖可能到 1.08；
+		// 波浪通常 >= 1.15。
+		if (arcRatio > 1.12f) return false;
+	}
+
+	// 6.2 偏差跨度与折返率
+	// 波浪的核心不是“偏得远”，而是“左右来回折返”。
+	float dMin = 1e30f, dMax = -1e30f;
 	for (size_t k = 0; k < N; ++k) {
-		WriteData& d = WriteDataTemp[k];
+		if (dist[k] < dMin) dMin = dist[k];
+		if (dist[k] > dMax) dMax = dist[k];
+	}
 
-		// 投影 (x, y)
-		float proj = ((d.x - x1) * dx + (d.y - y1) * dy) / denom;
-		d.x = x1 + proj * dx;
-		d.y = y1 + proj * dy;
+	float dSpan = dMax - dMin;
 
-		// 投影 (x2, y2)
-		float proj2 = ((d.x2 - x1) * dx + (d.y2 - y1) * dy) / denom;
-		d.x2 = x1 + proj2 * dx;
-		d.y2 = y1 + proj2 * dy;
+	if (dSpan > adaptTol * 0.8f && N >= 4) {
+		float sumAbsDelta = 0.f;
+		for (size_t k = 1; k < N; ++k) {
+			sumAbsDelta += fabsf(dist[k] - dist[k - 1]);
+		}
 
-		// 关键：绘制阶段只要 CurvePts 非空就会走 SDFBatchPushCurve，
-		// 完全忽略 x/y 与 x2/y2。若不同步折算曲线采样点，上面的投影结果
-		// 只落在数据里、不会体现在画面上，表现为「触发了矫正但笔迹没变」。
+		// 直线：偏差通常缓慢漂移，sumAbsDelta / dSpan 接近 1。
+		// 波浪：来回摆，sumAbsDelta / dSpan 会变大。
+		float sawRatio = sumAbsDelta / dSpan;
+
+		// 2.4 偏保守，尽量不伤直线；
+		// 如果明显波浪仍漏，改到 2.1 或 2.0。
+		if (sawRatio > 2.4f) return false;
+	}
+
+	// 6.3 主轴过零次数
+	// 直线/单侧弧：通常不穿或只穿一次。
+	// 波浪：会多次穿过主轴。
+	if (dSpan > adaptTol * 0.8f) {
+		float deadZone = max(adaptTol * 0.35f, dSpan * 0.12f);
+
+		int crossCount = 0;
+		int prevSign = 0;
+
+		for (size_t k = 0; k < N; ++k) {
+			int s = 0;
+			if (dist[k] > deadZone) s = 1;
+			else if (dist[k] < -deadZone) s = -1;
+
+			if (s != 0) {
+				if (prevSign != 0 && s != prevSign) {
+					crossCount++;
+				}
+				prevSign = s;
+			}
+		}
+
+		// 2 次穿越 = 一个完整上下波。
+		if (crossCount >= 2) return false;
+	}
+
+	// 6.4 局部方向反复反转
+	// 这是补充判断：有些波浪没有真正穿过主轴，
+	// 只是在一侧上下抖，这种靠 sawRatio 和局部反转抓。
+	if (N >= 8) {
+		int reverseCount = 0;
+
+		// 从前 10% 到后 90% 检查，避免端点抖动影响太大
+		size_t start = N / 10;
+		size_t end = N - start;
+
+		for (size_t k = start + 2; k + 1 < end; ++k) {
+			float a = dist[k] - dist[k - 2];
+			float b = dist[k + 1] - dist[k - 1];
+
+			// 偏差变化趋势反向
+			if (a * b < 0.f) {
+				// 幅度必须足够，不然手抖噪声会误判
+				if (fabsf(a) > adaptTol * 0.25f &&
+					fabsf(b) > adaptTol * 0.25f) {
+					reverseCount++;
+				}
+			}
+		}
+
+		// 直线通常 0~1 次，波浪会多次反向
+		if (reverseCount >= 3) return false;
+	}
+
+	// =========================================================
+	// ---------- 7. 沿主轴重新投影矫正 ----------
+	// =========================================================
+	for (size_t k = 0; k < N; ++k) {
+		auto& d = WriteDataTemp[k];
+
+		d.w = Tool::PenSize;
+
+		auto project = [&](float x, float y, float& ox, float& oy) {
+			float p = (x - cx) * dirX + (y - cy) * dirY;
+			ox = cx + p * dirX;
+			oy = cy + p * dirY;
+		};
+
+		project(d.x, d.y, d.x, d.y);
+		project(d.x2, d.y2, d.x2, d.y2);
+
 		for (auto& p : d.CurvePts) {
-			float pp = ((p.x - x1) * dx + (p.y - y1) * dy) / denom;
-			p.x = x1 + pp * dx;
-			p.y = y1 + pp * dy;
+			project(p.x, p.y, p.x, p.y);
 		}
 	}
 
 	return true;
-}
-
-struct LineEndpoints
-{
-	float x1, y1;
-	float x2, y2;
-};
-
-LineEndpoints GetStraightenedEndpoints(
-	const vector<WriteData>& WriteDataTemp,
-	float scale,
-	const Vector2i& camPos)
-{
-	LineEndpoints ep;
-	size_t N = WriteDataTemp.size();
-	if (N == 0) return {};
-
-	float camScaleX = camPos.x * scale;
-	float camScaleY = camPos.y * scale;
-
-	// 起点（用第一个点的 x/y）
-	ep.x1 = WriteDataTemp.front().x * scale + camScaleX;
-	ep.y1 = WriteDataTemp.front().y * scale + camScaleY;
-
-	// 终点（用最后一个点的 x2/y2，和你渲染逻辑一致）
-	ep.x2 = WriteDataTemp.back().x2 * scale + camScaleX;
-	ep.y2 = WriteDataTemp.back().y2 * scale + camScaleY;
-
-	return ep;
 }
 
 bool StraightenWriteDataToCircle(
 	vector<WriteData>& WriteDataTemp,
-	float toleranceRatio = 0.28f,
+	float toleranceRatio = 0.32f,
 	float minRadius = 30.f * ScreenScale * 100.0 / GetCurPage().Scale,
-	float closeRatio = 0.85f)
+	float closeRatio = 0.80f)
 {
-	size_t N = WriteDataTemp.size();
-	// 圆拟合至少需要 3 个不共线点；
+	const size_t N = WriteDataTemp.size();
 	if (N < 3) return false;
 
-	// 取中点进行圆拟合 (抗噪)
+	const float PI = 3.14159265358979323846f;
+
+	// ============================================================
+	// 1. 中心线采样
+	// ============================================================
 	vector<float> px(N), py(N);
+	float arcLenTotal = 0.f;
 	for (size_t i = 0; i < N; ++i) {
 		px[i] = (WriteDataTemp[i].x + WriteDataTemp[i].x2) * 0.5f;
 		py[i] = (WriteDataTemp[i].y + WriteDataTemp[i].y2) * 0.5f;
+		if (!isfinite(px[i]) || !isfinite(py[i])) return false;
+		if (i > 0) arcLenTotal += hypotf(px[i] - px[i - 1], py[i] - py[i - 1]);
 	}
+	float gap01 = hypotf(px[0] - px[N - 1], py[0] - py[N - 1]);
+	float perimeter = arcLenTotal + gap01;
+	if (!(perimeter > 1e-3f) || !isfinite(perimeter)) return false;
 
+	// ============================================================
+	// 2. 质心
+	// ============================================================
 	float mx = 0.f, my = 0.f;
 	for (size_t i = 0; i < N; ++i) { mx += px[i]; my += py[i]; }
-	mx /= N; my /= N;
+	mx /= (float)N; my /= (float)N;
+	if (!isfinite(mx) || !isfinite(my)) return false;
 
-	// Taubin 圆拟合
-	float Suu = 0.f, Svv = 0.f, Suuv = 0.f, Suvv = 0.f, Suuu = 0.f, Svvv = 0.f;
+	// ============================================================
+	// 3. Taubin 圆拟合
+	// ============================================================
+	float Suu = 0, Svv = 0, Suuv = 0, Suvv = 0, Suuu = 0, Svvv = 0;
 	for (size_t i = 0; i < N; ++i) {
 		float u = px[i] - mx, v = py[i] - my;
 		float u2 = u * u, v2 = v * v;
-		Suu += u2; Svv += v2; Suuv += u2 * v; Suvv += u * v2; Suuu += u2 * u; Svvv += v2 * v;
+		Suu += u2; Svv += v2;
+		Suuv += u2 * v; Suvv += u * v2;
+		Suuu += u2 * u; Svvv += v2 * v;
 	}
-
 	float A = Suu + Svv;
-	if (abs(A) < 1e-6f) return false;
+	if (!(A > 1e-6f) || !isfinite(A)) return false;
 	float B = 0.5f * (Suuu + Suuv + Suvv + Svvv);
 	float cx = mx + (Suuv * A - Suvv * B) / (A * A + 1e-6f);
 	float cy = my + (Suvv * A - Suu * B) / (A * A + 1e-6f);
+	if (!isfinite(cx) || !isfinite(cy)) return false;
 
-	// 计算平均半径
-	float meanR = 0.f;
-	for (size_t i = 0; i < N; ++i) meanR += sqrt((px[i] - cx) * (px[i] - cx) + (py[i] - cy) * (py[i] - cy));
-	meanR /= N;
+	// ============================================================
+	// 4. PCA 主轴
+	// ============================================================
+	float sxx = 0, syy = 0, sxy = 0;
+	for (size_t i = 0; i < N; ++i) {
+		float u = px[i] - cx, v = py[i] - cy;
+		sxx += u * u; syy += v * v; sxy += u * v;
+	}
+	float theta = 0.5f * atan2f(2.f * sxy, sxx - syy);
+	float dirX = cosf(theta), dirY = sinf(theta);
+	float nrmX = -dirY, nrmY = dirX;
+	if (!isfinite(dirX) || !isfinite(dirY)) return false;
 
+	// ============================================================
+	// 5. 半轴（★ 平方累加）
+	// ============================================================
+	float sumA2 = 0.f, sumB2 = 0.f;
+	for (size_t i = 0; i < N; ++i) {
+		float u = px[i] - cx, v = py[i] - cy;
+		float a = u * dirX + v * dirY;
+		float b = u * nrmX + v * nrmY;
+		sumA2 += a * a;
+		sumB2 += b * b;
+	}
+	float halfA = sqrtf(sumA2 / (float)N * 2.f);
+	float halfB = sqrtf(sumB2 / (float)N * 2.f);
+	if (!isfinite(halfA) || !isfinite(halfB)) return false;
+	if (halfA < 1e-3f || halfB < 1e-3f) return false;
+	if (halfB > halfA) { swap(halfA, halfB); swap(dirX, nrmX); swap(dirY, nrmY); }
+
+	// ============================================================
+	// 6. 防塌缩 / 防膨胀
+	// ============================================================
+	float maxR = 0.f;
+	for (size_t i = 0; i < N; ++i) {
+		float u = px[i] - cx, v = py[i] - cy;
+		float r = sqrtf(u * u + v * v);
+		if (r > maxR) maxR = r;
+	}
+	if (!(maxR > 1e-3f) || !isfinite(maxR)) return false;
+	if (halfA < maxR * 0.30f) return false;
+	if (halfA > maxR * 3.00f) return false;
+
+	float meanR = (halfA + halfB) * 0.5f;
+	if (!(meanR > 1e-2f) || !isfinite(meanR)) return false;
 	if (meanR < minRadius) return false;
 
-	// 容错检查
-	float tol = meanR * toleranceRatio;
-	int outliers = 0;
-	for (size_t i = 0; i < N; ++i) {
-		float r = sqrt((px[i] - cx) * (px[i] - cx) + (py[i] - cy) * (py[i] - cy));
-		if (abs(r - meanR) > tol) ++outliers;
-	}
-	// 离群点比例上限从 25% 收紧到 12%：椭圆各点半径差异大，会频繁超出收紧后的容差，
-	// 从而被判为离群，避免椭圆被强行拉成圆。
-	if (outliers > (int)(N * 0.15f)) return false;
+	// ============================================================
+	// 7. 离心率
+	// ============================================================
+	float ecc = sqrtf(1.f - (halfB * halfB) / (halfA * halfA + 1e-6f));
+	if (!isfinite(ecc)) return false;
 
-	// 角度覆盖检查：逐段累加相邻点的角度增量，得到真实扫过的总弧度。
-	// 不能用 atan2(尾) - atan2(首) 直接相减——那样会把"绕了多圈"的信息丢掉，
-	// 只要首尾角度接近就误判为闭合圆（例如只画了 1/4 圈的弧，起止点却靠得很近）。
+	// ============================================================
+	// 8. 扫过角度（闭合性）
+	// ============================================================
 	float sweep = 0.f;
+	vector<float> ang(N);
+	for (size_t i = 0; i < N; ++i) ang[i] = atan2f(py[i] - cy, px[i] - cx);
 	for (size_t i = 1; i < N; ++i) {
-		float a0 = atan2(py[i - 1] - cy, px[i - 1] - cx);
-		float a1 = atan2(py[i] - cy, px[i] - cx);
-		float delta = a1 - a0;
+		float d = ang[i] - ang[i - 1];
+		while (d > PI) d -= 2.f * PI;
+		while (d < -PI) d += 2.f * PI;
+		sweep += d;
+	}
+	if (fabsf(sweep) < 2.f * PI * closeRatio) return false;
 
-		// 归一化到 (-pi, pi]，避免跨越 ±pi 时出现 2pi 的假跳变
-		while (delta > 3.14159265f) delta -= 2.f * 3.14159265f;
-		while (delta < -3.14159265f) delta += 2.f * 3.14159265f;
+	// ============================================================
+	// 9. 多边形 / 矩形拦截（计分制，>=3 分才拒）
+	// ============================================================
+	int polyScore = 0;
 
-		sweep += delta;
+	// ------------------------------------------------------------
+	// 证据 0（★ 主力，N>=6 即可）：极长的笔直段 = 多边形的边
+	// 门槛双高：既要「极直」(0.992) 又要「极长」(22% 周长)
+	//   矩形一条边 ≈ 0.25 且精确直线 → 必中
+	//   手绘大圆最长段 ≈ 0.10~0.16 且不够直 → 不中
+	// ------------------------------------------------------------
+	if (N >= 6) {
+		float bestFrac = 0.f;
+		for (size_t i = 0; i < N; ++i) {
+			for (size_t j = i + 2; j < N; ++j) {
+				float cxlen = hypotf(px[j] - px[i], py[j] - py[i]);
+				if (cxlen < 1e-4f) continue;
+
+				float arclen = 0.f;
+				for (size_t k = i + 1; k <= j; ++k)
+					arclen += hypotf(px[k] - px[k - 1], py[k] - py[k - 1]);
+				if (arclen < 1e-4f) continue;
+
+				if (cxlen / arclen > 0.992f) {
+					float frac = arclen / perimeter;
+					if (frac > bestFrac) bestFrac = frac;
+				}
+			}
+		}
+		if (bestFrac > 0.22f) polyScore += 3;
 	}
 
-	// 累计增量可能为负（顺时针绘制），取绝对值即为实际扫过角度
-	float swept = abs(sweep);
-
-	// 采样过疏时，相邻点之间可能存在大跨度，导致扇形角丢失；
-	// 这里用"首尾直线距离 vs 弧长"做一次粗校验，防止窄扇形被当成整圆。
-	// 若首尾很近但累计角度很大，说明确实绕行了多圈，此时保留判定。
-	if (swept < 2.f * 3.14159265f * closeRatio) return false;
-
-	// 【核心】独立投影 + 首尾微调
-	for (size_t i = 0; i < N; ++i) {
-		WriteData& d = WriteDataTemp[i];
-
-		// 1. 内点 (x,y) 投影到平均半径
-		float ang1 = atan2(d.y - cy, d.x - cx);
-		d.x = cx + meanR * cos(ang1);
-		d.y = cy + meanR * sin(ang1);
-
-		// 2. 外点 (x2,y2) 独立投影到平均半径 (不再人为加宽，消除交错)
-		float ang2 = atan2(d.y2 - cy, d.x2 - cx);
-		d.x2 = cx + meanR * cos(ang2);
-		d.y2 = cy + meanR * sin(ang2);
-
-		// 3. 处理极短线段（若原x2y2与xy几乎重合，保持重合避免单点断裂）
-		float origLen = hypot(d.x2 - d.x, d.y2 - d.y);
-		if (origLen < 1e-4f) {
-			d.x2 = d.x;
-			d.y2 = d.y;
+	// --- 证据 1~4：角度/曲率特征（N>=8 / N>=12 才跑，小 N 自动跳过） ---
+	if (N >= 8) {
+		vector<float> dAng(N - 1);
+		float totalAbs = 0.f, maxStep = 0.f;
+		for (size_t i = 1; i < N; ++i) {
+			float d = ang[i] - ang[i - 1];
+			while (d > PI) d -= 2.f * PI;
+			while (d < -PI) d += 2.f * PI;
+			dAng[i - 1] = d;
+			totalAbs += fabsf(d);
+			if (fabsf(d) > maxStep) maxStep = fabsf(d);
 		}
+		float avgStep = totalAbs / (float)(N - 1);
+		if (avgStep > 1e-5f) {
+			// 证据 1：单步转角尖峰（放宽 12 → 20）
+			if (maxStep / avgStep > 20.f) polyScore++;
 
-		// 4. 关键：绘制阶段只要 CurvePts 非空就会走 SDFBatchPushCurve，
-		// 完全忽略 x/y 与 x2/y2。若不同步折算曲线采样点，上面的投影结果
-		// 只落在数据里、不会体现在画面上，表现为「触发了圆矫正但笔迹没变」。
-		// 采样点不在精确圆上，因此按"到圆心的角度"重新落到平均半径 meanR 上。
-		for (auto& p : d.CurvePts) {
-			float pang = atan2(p.y - cy, p.x - cx);
-			p.x = cx + meanR * cos(pang);
-			p.y = cy + meanR * sin(pang);
+			// 证据 2：大片不转角（放宽 0.55 → 0.70）
+			int flat = 0;
+			for (size_t i = 0; i + 1 < N; ++i)
+				if (fabsf(dAng[i]) < avgStep * 0.20f) ++flat;
+			if (flat > (int)((N - 1) * 0.70f)) polyScore++;
+
+			// 证据 3：曲率尖峰（放宽 20 → 40）
+			if (N >= 12) {
+				vector<float> absC;
+				absC.reserve(N);
+				for (size_t i = 1; i + 1 < N; ++i)
+					absC.push_back(fabsf(dAng[i - 1] + dAng[i]));
+				if (!absC.empty()) {
+					sort(absC.begin(), absC.end());
+					float med = absC[absC.size() / 2];
+					float mx = absC.back();
+					if (med > 1e-5f && mx / med > 40.f) polyScore++;
+				}
+			}
+
+			// 证据 4：转角方向多次反转（放宽 4 → 6）
+			if (N >= 12) {
+				int flip = 0, prev = 0;
+				for (size_t i = 1; i + 1 < N; ++i) {
+					float c = dAng[i - 1] + dAng[i];
+					if (fabsf(c) < 1e-4f) continue;
+					int s = (c > 0.f) ? 1 : -1;
+					if (prev != 0 && s != prev) ++flip;
+					prev = s;
+				}
+				if (flip >= 6) polyScore++;
+			}
 		}
 	}
 
-	// 4. 首尾闭合微调（解决图中左侧微缺口）
-	// 追加约束：首尾间距需小于 0.05 倍半径，超过则视为开口弧（非闭合圆），不做拉齐，
-	// 避免把用户有意留出的缺口强行闭合。
+	// --- 证据 5：扇区半径近-远交替（放宽 0.30 → 0.40） ---
+	if (N >= 16) {
+		const int SEC = 8;
+		float secSum[SEC]; int secCnt[SEC];
+		for (int s = 0; s < SEC; ++s) { secSum[s] = 0.f; secCnt[s] = 0; }
+		for (size_t i = 0; i < N; ++i) {
+			float u = px[i] - cx, v = py[i] - cy;
+			float r = sqrtf(u * u + v * v);
+			float a = ang[i]; if (a < 0.f) a += 2.f * PI;
+			int s = (int)(a / (2.f * PI) * SEC);
+			if (s < 0) s = 0;
+			if (s >= SEC) s = SEC - 1;
+			secSum[s] += r; secCnt[s]++;
+		}
+		float rMin = 1e30f, rMax = -1e30f;
+		for (int s = 0; s < SEC; ++s) if (secCnt[s] > 0) {
+			float av = secSum[s] / (float)secCnt[s];
+			rMin = min(rMin, av); rMax = max(rMax, av);
+		}
+		if (rMin > 1e-3f && (rMax - rMin) / meanR > 0.40f) polyScore++;
+	}
+
+	if (polyScore >= 3) return false;
+
+	// 诊断（调通后注释掉）
+	// printf("[circle] ecc=%.3f score=%d bestFrac=%.3f tol=%.2f out=%d N=%d\n",
+	//        ecc, polyScore, bestFrac, toleranceRatio, outliers, (int)N);
+
+	// ============================================================
+	// 10. 分支 1：正圆
+	// ============================================================
+	if (ecc < 0.35f) {
+		float tol = meanR * toleranceRatio;
+		int outliers = 0;
+		for (size_t i = 0; i < N; ++i) {
+			float dx = px[i] - cx, dy = py[i] - cy;
+			if (fabsf(sqrtf(dx * dx + dy * dy) - meanR) > tol) ++outliers;
+		}
+		if (outliers > (int)(N * 0.22f)) return false;
+
+		for (size_t i = 0; i < N; ++i) {
+			WriteData& d = WriteDataTemp[i];
+			d.w = Tool::PenSize;
+
+			if (!(meanR > 1e-2f) || !isfinite(meanR)) return false;
+
+			auto project = [&](float x, float y, float& ox, float& oy) {
+				float dx = x - cx, dy = y - cy;
+				if (!(dx * dx + dy * dy > 1e-8f)) { ox = x; oy = y; return; }
+				float a = atan2f(dy, dx);
+				if (!isfinite(a)) { ox = x; oy = y; return; }
+				ox = cx + meanR * cosf(a);
+				oy = cy + meanR * sinf(a);
+				};
+			project(d.x, d.y, d.x, d.y);
+			project(d.x2, d.y2, d.x2, d.y2);
+
+			const size_t M = d.CurvePts.size();
+			for (size_t j = 0; j < M; ++j) {
+				auto& p = d.CurvePts[j];
+				float dx = p.x - cx, dy = p.y - cy;
+				float a;
+				if (hypotf(dx, dy) > 1e-4f) a = atan2f(dy, dx);
+				else a = 2.f * PI * (float)j / (float)max<size_t>(1, M);
+				if (!isfinite(a)) a = 2.f * PI * (float)j / (float)max<size_t>(1, M);
+				p.x = cx + meanR * cosf(a);
+				p.y = cy + meanR * sinf(a);
+			}
+		}
+	}
+	// ============================================================
+	// 11. 分支 2：椭圆
+	// ============================================================
+	else {
+		if (halfB < meanR * 0.12f) return false;
+		if (!(halfA > 1e-2f) || !(halfB > 1e-2f)) return false;
+		if (!isfinite(halfA) || !isfinite(halfB)) return false;
+
+		float tol = toleranceRatio;
+		int outliers = 0;
+		for (size_t i = 0; i < N; ++i) {
+			float u = px[i] - cx, v = py[i] - cy;
+			float a = u * dirX + v * dirY;
+			float b = u * nrmX + v * nrmY;
+			float rNorm = sqrtf((a * a) / (halfA * halfA) + (b * b) / (halfB * halfB));
+			if (fabsf(rNorm - 1.f) > tol) ++outliers;
+		}
+		if (outliers > (int)(N * 0.22f)) return false;
+
+		for (size_t i = 0; i < N; ++i) {
+			WriteData& d = WriteDataTemp[i];
+			d.w = Tool::PenSize;
+
+			auto project = [&](float x, float y, float& ox, float& oy) {
+				float u = x - cx, v = y - cy;
+				if (u * u + v * v < 1e-8f) { ox = x; oy = y; return; }
+				float a = u * dirX + v * dirY;
+				float b = u * nrmX + v * nrmY;
+				float phi = atan2f(b / halfB, a / halfA);
+				if (!isfinite(phi)) { ox = x; oy = y; return; }
+				ox = cx + halfA * cosf(phi) * dirX + halfB * sinf(phi) * nrmX;
+				oy = cy + halfA * cosf(phi) * dirY + halfB * sinf(phi) * nrmY;
+				};
+			project(d.x, d.y, d.x, d.y);
+			project(d.x2, d.y2, d.x2, d.y2);
+
+			const size_t M = d.CurvePts.size();
+			for (size_t j = 0; j < M; ++j) {
+				auto& p = d.CurvePts[j];
+				float u = p.x - cx, v = p.y - cy;
+				float a = u * dirX + v * dirY;
+				float b = u * nrmX + v * nrmY;
+				float phi;
+				if (u * u + v * v > 1e-8f) phi = atan2f(b / halfB, a / halfA);
+				else phi = 2.f * PI * (float)j / (float)max<size_t>(1, M);
+				if (!isfinite(phi)) phi = 2.f * PI * (float)j / (float)max<size_t>(1, M);
+				p.x = cx + halfA * cosf(phi) * dirX + halfB * sinf(phi) * nrmX;
+				p.y = cy + halfA * cosf(phi) * dirY + halfB * sinf(phi) * nrmY;
+			}
+		}
+	}
+
+	// ============================================================
+	// 12. 首尾闭合微调
+	// ============================================================
 	if (N > 1) {
-		float gap = hypot(WriteDataTemp[0].x - WriteDataTemp[N - 1].x, WriteDataTemp[0].y - WriteDataTemp[N - 1].y);
-		if (gap <= meanR * 0.2f) { // 首尾间距不大于5%半径才拉齐
-			float midX = (WriteDataTemp[0].x + WriteDataTemp[N - 1].x) * 0.5f;
-			float midY = (WriteDataTemp[0].y + WriteDataTemp[N - 1].y) * 0.5f;
-			WriteDataTemp[0].x = WriteDataTemp[N - 1].x = midX;
-			WriteDataTemp[0].y = WriteDataTemp[N - 1].y = midY;
-
-			// 同步x2y2的闭合
-			float midX2 = (WriteDataTemp[0].x2 + WriteDataTemp[N - 1].x2) * 0.5f;
-			float midY2 = (WriteDataTemp[0].y2 + WriteDataTemp[N - 1].y2) * 0.5f;
-			WriteDataTemp[0].x2 = WriteDataTemp[N - 1].x2 = midX2;
-			WriteDataTemp[0].y2 = WriteDataTemp[N - 1].y2 = midY2;
+		float gap = hypotf(
+			WriteDataTemp[0].x - WriteDataTemp[N - 1].x,
+			WriteDataTemp[0].y - WriteDataTemp[N - 1].y);
+		if (gap <= meanR * 0.25f) {
+			float mx_ = (WriteDataTemp[0].x + WriteDataTemp[N - 1].x) * 0.5f;
+			float my_ = (WriteDataTemp[0].y + WriteDataTemp[N - 1].y) * 0.5f;
+			float mx2_ = (WriteDataTemp[0].x2 + WriteDataTemp[N - 1].x2) * 0.5f;
+			float my2_ = (WriteDataTemp[0].y2 + WriteDataTemp[N - 1].y2) * 0.5f;
+			WriteDataTemp[0].x = WriteDataTemp[N - 1].x = mx_;
+			WriteDataTemp[0].y = WriteDataTemp[N - 1].y = my_;
+			WriteDataTemp[0].x2 = WriteDataTemp[N - 1].x2 = mx2_;
+			WriteDataTemp[0].y2 = WriteDataTemp[N - 1].y2 = my2_;
 		}
 	}
 
 	return true;
 }
-
 
 #pragma endregion
 
@@ -4711,6 +4898,11 @@ void WriteSub(RenWin& window)
 	static Vector2i LastPoint = { -1,-1 };
 	static int WriteTime = 0;
 
+	// ================= 方案A：整笔采样缓冲 =================
+	// 落笔期只采点，抬笔时一次性做 Catmull-Rom 平滑后展开成折线。
+	// 必须逐笔清空：按钮命中、抬笔提交后都要 clear，否则会把上一笔的尾巴接进来。
+	static vector<Vector2f> RawStrokePts;
+
 	auto& pd = GetCurPage();
 	float scale = pd.Scale / 100.0f;   // 缩放因子
 
@@ -4732,13 +4924,12 @@ void WriteSub(RenWin& window)
 		// 否则点击按钮会穿透到底层画布，在按钮位置留下多余笔画，
 		// 该短笔画还会让所属节点的底线被误判为「有内容」而错误延展。
 		// 命中范围同时包含 + / 调色 / 删除(-) 三个按钮。
-		// 表格的 + / - 按钮与思维导图共用同一套「按钮命中即屏蔽」策略：
-		// 若不在此拦截，点击表格按钮会穿透到画布，在按钮位置留下短笔画，
-		// 该笔画还会被后续「删除某行/某列时连带删除笔迹」的逻辑误处理。
+		// 表格的 + / - 按钮与思维导图共用同一套「按钮命中即屏蔽」策略。
 		if (MindMap::IsBtnHit() || WriteTable::IsBtnHit())
 		{
 			// 关键：清空本帧已累积的按钮触控笔迹，防止它被提交成真实笔画
 			WriteDataTemp.clear();
+			RawStrokePts.clear();       // 同步丢弃正在采样的整笔，避免与后续笔画相连
 			AdjustLineLine.enabled = false;
 
 			// 同步重置书写参考点，避免按钮点击结束后与后续笔画连成一条线
@@ -4747,7 +4938,7 @@ void WriteSub(RenWin& window)
 			return;
 		}
 
-		if(WritePos != LastPoint || WriteDataTemp.empty())
+		if (WritePos != LastPoint || WriteDataTemp.empty())
 		{
 			if (WritePos.x < 1 || WritePos.y < 1) return;
 
@@ -4757,12 +4948,6 @@ void WriteSub(RenWin& window)
 			if (LastPoint.x < 0 || LastPoint.y < 0)
 			{
 				LastPoint = WritePos;
-
-				/*static int XOffset = -WindowSize.x / 800;
-				static int YOffset = XOffset;
-
-				LastPoint.x += XOffset;
-				LastPoint.y += YOffset;*/
 			}
 
 			// 坐标除以缩放，保证存入的是世界坐标
@@ -4771,89 +4956,18 @@ void WriteSub(RenWin& window)
 			NewData.x2 = WritePos.x / scale - pd.CameraPos.x;
 			NewData.y2 = WritePos.y / scale - pd.CameraPos.y;
 
-			// 贝塞尔曲线展开（原地坐标改写）
-			// ---------------------------------------------------------------
-			// 设计约束：坐标变换只允许发生在 WriteSub，绘制阶段（DrawLayer /
-			// DrawNowLayer）只按已存好的坐标连线段，不能再做任何曲线求值或坐标改写。
-			// 因此这里在落笔时就一次性把本段笔迹展开成曲线采样点，并直接写回
-			// WriteData 的坐标字段，使「笔画端点」本身即是曲线上的点：
-			//   - 起点 (x, y) 取上一段笔迹的末点，保证与上一段严格首尾相接（C0）；
-			//   - 终点 (x2, y2) 取本段真实触控点，保证笔迹不会滞后于手指；
-			//   - 控制点按 Catmull-Rom 转三次贝塞尔生成（与 BezierSmoothSegment 同一套公式），
-			//     使相邻段在连接处切线一致（C1），消除快速书写时的折角。
-			// 控制点用世界坐标计算即可：缩放/相机平移是线性变换，
-			// 先变换后求值与先求值后变换结果等价，不影响曲线形状。
-			if (Tool::PenCap != 3) // 柳叶笔走三角填充，不参与曲线平滑
-			{
-				// 本段起点：优先接上一段已提交的末点；首段则用当前触控点（退化为直线）
-				Vector2f curveFrom = { NewData.x, NewData.y };
-				if (!WriteDataTemp.empty())
-				{
-					const WriteData& prevData = WriteDataTemp.back();
-					curveFrom.x = prevData.x2;
-					curveFrom.y = prevData.y2;
-				}
-				else
-				{
-					curveFrom.x = NewData.x2;
-					curveFrom.y = NewData.y2;
-				}
-
-				// 本段终点：本帧真实触控点（世界坐标）
-				Vector2f curveTo = { NewData.x2, NewData.y2 };
-
-				// 前驱邻点：上一段的「起点」；无上一段时与 curveFrom 重合（首段退化为直线）
-				Vector2f curvePrev = curveFrom;
-				if (WriteDataTemp.size() >= 2)
-				{
-					const WriteData& prevData = WriteDataTemp[WriteDataTemp.size() - 2];
-					curvePrev.x = prevData.x2;
-					curvePrev.y = prevData.y2;
-				}
-
-				// 后继邻点：本段尚无下一段，取与 curveTo 重合（尾段退化为直线）。
-				// 这样曲线末端切线方向为 to - from，指向手指运动方向，不会出现「回勾」。
-				Vector2f curveNext = curveTo;
-
-				// Catmull-Rom 转三次贝塞尔控制点（臂长 1/6，与 BezierSmoothSegment 一致）
-				Vector2f cp1(curveFrom.x + (curveTo.x - curvePrev.x) / 6.f,
-				             curveFrom.y + (curveTo.y - curvePrev.y) / 6.f);
-				Vector2f cp2(curveTo.x   - (curveNext.x - curveFrom.x) / 6.f,
-				             curveTo.y   - (curveNext.y - curveFrom.y) / 6.f);
-
-				// 自适应细分：曲线越弯曲/越长，采样点越多，保证肉眼看不到折线
-				int segN = BezierSubdivCount(curveFrom, cp1, cp2, curveTo);
-
-				// 采样点写入 CurvePts（世界坐标），供绘制阶段直接连线段使用。
-				// 绘制阶段不再做曲线求值，因此这里必须把点算全。
-				NewData.CurvePts.clear();
-				NewData.CurvePts.reserve(segN + 1);
-				for (int i = 0; i <= segN; ++i)
-				{
-					float t = (float)i / (float)segN;
-					NewData.CurvePts.push_back(BezierEval(curveFrom, cp1, cp2, curveTo, t));
-				}
-
-				// 原地改写端点坐标：起点吸附到上一段末点，终点保持真实触控点。
-				// 首段时 curveFrom 已等于当前触控点，此赋值等于不变，天然兼容起笔。
-				NewData.x = curveFrom.x;
-				NewData.y = curveFrom.y;
-				NewData.x2 = curveTo.x;
-				NewData.y2 = curveTo.y;
-			}
-
 			if (PenW > Tool::PenSize / 2 && Tool::PenCap == 0)
-			{				
+			{
 				PenW -= 0.6;
 			}
 
 			// 线宽按缩放比例存
 			if (Tool::PenCap == 2)
 			{
-				if(!WriteCamera::EnableWriteCamera) NewData.w = PenW * 2;
+				if (!WriteCamera::EnableWriteCamera) NewData.w = PenW * 2;
 				else NewData.w = PenW * 2 / 3;
 			}
-			else 
+			else
 			{
 				if (!WriteCamera::EnableWriteCamera) NewData.w = PenW;
 				else NewData.w = PenW / 3;
@@ -4925,7 +5039,6 @@ void WriteSub(RenWin& window)
 			}
 		}
 		else AdjustLineLine.enabled = false;
-		//caonimade
 
 		PenW = Tool::PenSize;
 
@@ -4950,7 +5063,7 @@ void WriteSub(RenWin& window)
 				newRowCreated ? vector<WriteData>{} : data.back()
 				});
 
-			if(User::EnableFixShape)
+			if (User::EnableFixShape)
 			{
 				if (StraightenWriteDataToCircle(WriteDataTemp))
 				{
@@ -4958,13 +5071,6 @@ void WriteSub(RenWin& window)
 				}
 				if (StraightenWriteData(WriteDataTemp))
 				{
-					LineEndpoints Straightens = GetStraightenedEndpoints(WriteDataTemp, scale, pd.CameraPos);
-
-					Color color = XColor::LightColor(Tool::PenColor, 0.7);
-					if (Tool::PenColor == Color::White) color = User::MainColor;
-					
-					AddPer(Straightens.x1, Straightens.y1, Straightens.x2, Straightens.y2, color);
-
 					DrawNowLayer(window);
 				}
 			}
@@ -5003,8 +5109,6 @@ void MoveCamera()
 		FlushImageLayer = true;
 	}
 
-	static const int CameraTo = 1;
-
 	int x, y;
 	Vector2i mousePos = XMsg::TouchMsg::GetTouchPos();
 	x = mousePos.x;
@@ -5015,14 +5119,6 @@ void MoveCamera()
 	static int MoveSleepTime = 0;
 
 	static Vector2i temp_mousep;
-
-	//触点数量变化（双指先后按下/松开存在时间差）时，参考点必须复位
-	static int LastTouchNum = 0;
-	if (TouchNum != LastTouchNum)
-	{
-		LastTouchNum = TouchNum;
-		temp_mousep.x = temp_mousep.y = 0;
-	}
 
 	//移动
 	if ((Tool::ToolCount == 3 && (TouchNum == 1 || XMsg::KeyMsg::Keystate(VK::MouseLeft))) || (Tool::ToolCount != 2 && TouchNum >= 2 && TouchNum <= 5))
@@ -5076,6 +5172,7 @@ void MoveCamera()
 	}
 
 	int wheel = XMsg::MouseMsg::GetMouseWheel();
+	static int WheelClock = 0;
 
 	//缩放
 	if (Tool::ToolCount == 3 || wheel != 0)
@@ -5120,7 +5217,7 @@ void MoveCamera()
 				}
 				else
 				{
-					BottomMessage::AddMessage(101, L"缩放: " + to_wstring(AfterScale) + L"%", BottomMessageType_INFO,120);
+					BottomMessage::AddMessage(101, L"缩放: " + to_wstring(AfterScale) + L"%", BottomMessageType_INFO, 120);
 				}
 
 				FlushWriteLayer = true;
@@ -5146,10 +5243,11 @@ void Write::Show(RenWin& window)
 		);
 
 		WriteTempLayer = RenderTexture(rtSize);
+		WriteTempLayer.setSmooth(false);
 
-		WriteLayer = RenderTexture(rtSize);
-		LightLayer = RenderTexture(rtSize);
-		ImageLayer = RenderTexture(rtSize);
+		WriteLayer = RenderTexture(rtSize); WriteLayer.setSmooth(false);
+		LightLayer = RenderTexture(rtSize); LightLayer.setSmooth(false);
+		ImageLayer = RenderTexture(rtSize); ImageLayer.setSmooth(false);
 
 		WriteTempLayer.clear(Color::Transparent);
 		WriteLayer.clear(Color::Transparent);
@@ -5240,9 +5338,6 @@ void Write::Show(RenWin& window)
 
 	//绘制对齐线
 	DrawAdjustLine(window);
-
-	//绘制特效
-	DrawPer(window);
 
 	if (FrontAlpha > 0)
 	{

@@ -14,8 +14,6 @@ void Error::ShowError(RenWin& window, std::vector<std::wstring> Discription, wst
 
 	int RestartClock = 300;
 
-	XSystem::Taskbar::SetTaskBarVisible(true);
-
 	static float Scale = WindowSize.x * 0.3 / 512.0;
 
 	int FontSize = WindowSize.x / 50;
