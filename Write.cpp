@@ -3616,26 +3616,20 @@ void DrawEraseRect(RenWin& window)
 	
 	Vector2i erasePos = XMsg::MouseMsg::GetMousePosWindow();
 
-	int EraseScaleSoft = EraseStf / ScreenScale;
+	static float BasicScale = WindowSize.x / 500 / ScreenScale / 512.0;
+	float ImgScale = BasicScale * Write::EraseSize;
 
-	int ex = erasePos.x - Write::EraseSize * EraseScaleSoft;
-	int ey = erasePos.y - Write::EraseSize * 1.4 * EraseScaleSoft;
+	static IMAGE Erase;
+	static bool init = false;
+	if (!init)
+	{
+		init = true;
 
-	static int r = WindowSize.x / 200;
+		XImage::NewImage(Erase, ImgPath + L"Erase\\Erase.dll");
+		XImage::SetImageSmooth(Erase, false);
+	}
 
-	XGraph::SetFillColor(Color(250, 250, 250));
-	XGraph::RectangleShape::FillRoundRect_WithoutBorder(ex, ey, Write::EraseSize * 2 * EraseScaleSoft, Write::EraseSize * 2.8 * EraseScaleSoft, r,window);
-	XGraph::SetColor(Color(220, 220, 220));
-	static int lw = WindowSize.x / 130;
-	XGraph::LineShape::SetLineWidth(lw);
-	XGraph::LineShape::Line(ex + Write::EraseSize * 0.6 * EraseScaleSoft,
-		ey + Write::EraseSize * 0.4 * EraseScaleSoft,
-		ex + Write::EraseSize * 0.6 * EraseScaleSoft,
-		ey + Write::EraseSize * 2.4 * EraseScaleSoft, window);
-	XGraph::LineShape::Line(ex + Write::EraseSize * 1.4 * EraseScaleSoft,
-		ey + Write::EraseSize * 0.4 * EraseScaleSoft,
-		ex + Write::EraseSize * 1.4 * EraseScaleSoft,
-		ey + Write::EraseSize * 2.4 * EraseScaleSoft, window);
+	XImage::PutScaleImage(Erase, erasePos.x, erasePos.y, ImgScale, ImgScale,window, 0.5, 0.5);
 
 	WriteStopTime = 10;
 }

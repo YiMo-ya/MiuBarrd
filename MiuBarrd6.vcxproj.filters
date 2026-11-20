@@ -81,6 +81,9 @@
     <ClCompile Include="ShareImage.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Hotbar.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Main.h">
@@ -150,6 +153,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ShareImage.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Hotbar.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

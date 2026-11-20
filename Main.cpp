@@ -10,6 +10,7 @@
 #include "Debug.h"
 #include "Update.h"
 #include "Error.h"
+#include "Hotbar.h"
 #include <dbghelp.h>
 #include <iostream>
 #pragma comment(lib, "dbghelp.lib")
@@ -269,9 +270,9 @@ void StartAnimation(int PosStartX,int PosStartY,int SizeStartX,int SizeStartY, R
 		{
 			XText::SetFontSize(ScreenSize.x / 50);
 			XText::Xyprintf(WindowSize.x / 2, WindowSize.y / 3, L"MiuBarrd白板", window);
-			XText::SetFontSize(ScreenSize.x / 80);
+			XText::SetFontSize(ScreenSize.x / 70);
 			XText::Xyprintf(WindowSize.x / 2, WindowSize.y / 2, emoji[emo], window);
-			XText::Xyprintf(WindowSize.x / 2, WindowSize.y / 1.6, L"---正在启动---", window);
+			XText::Xyprintf(WindowSize.x / 2, WindowSize.y / 1.6, L"--- Loading ---", window);
 		}
 	}
 }
@@ -313,6 +314,9 @@ void App(RenWin& window)
 
 		//书写逻辑
 		Write::WriteT(window);
+
+		//快捷栏逻辑
+		Hotbar::Main(window);
 		
 		if(Tool::CanDeath && !XWindow::IsFocus(window))
 		{

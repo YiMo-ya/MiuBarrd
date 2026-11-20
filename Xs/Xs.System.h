@@ -1,8 +1,8 @@
 #pragma once
 #include "Xs.Main.h"
 #include <shobjidl.h>
-#include <atomic>
 #include <shellapi.h>
+#include <atomic>
 #undef ERROR
 //=======================================
 /*

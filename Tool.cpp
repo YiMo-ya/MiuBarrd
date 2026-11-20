@@ -1,6 +1,4 @@
-﻿// ShareImage.h 会引入 winsock2.h，必须先于任何包含 windows.h 的头文件，
-// 否则会触发 sockaddr / fd_set / timeval 等结构体重定义错误
-#include "ShareImage.h"
+﻿#include "ShareImage.h"
 #include "Tool.h"
 #include "Shared.h"
 #include "Debug.h"
@@ -311,7 +309,7 @@ int ChooseGetType(RenWin& window)
 	int choose = 0;
 
 	RenWin temp;
-	XWindow::CreateGraphWindow(temp, L"选择导入方式", -1, -1, WindowSize.x / 2, WindowSize.y / 2, Style::Titlebar | Style::Close);
+	XWindow::CreateGraphWindow(temp, L"选择打开文件的方式", -1, -1, WindowSize.x / 2, WindowSize.y / 2, Style::Titlebar | Style::Close);
 	XWindow::DWM::SetWindowTitleBarColor(temp, XWindow::GetBackGroundColor());
 	XWindow::SetOwnerWindow(window);
 	XWindow::DWM::SetWindowBorderColor(temp, User::MainColor);
@@ -416,7 +414,7 @@ int ChooseGetType(RenWin& window)
 		if (choose == 0)
 		{
 			static vector<wstring> dis = {
-				L"从本地导入mwf或者图片文件"
+				L"从本地打开mwf或者图片文件"
 			};
 
 			XText::SetFontConfig(Color::White, FONTSIZE);
@@ -846,9 +844,6 @@ class MainBar
 	//底线基准长度
 	int BottomLineBasicLengh = WindowSize.x * 0.01;
 
-	//缩放
-	EV yScale;
-
 	void Ext()
 	{
 		SetExtV(true);
@@ -925,7 +920,6 @@ public:
 
 		s.setPosition({ pos.x.value - 1 - size.x.value * CenterX,pos.y.value - 1 - size.y.value * CenterY });
 		s.setColor(Color(255, 255, 255, UIAlpha));
-		s.setScale(Vector2f(1, yScale.value / 100.0));
 		window.draw(s);
 	}
 
@@ -956,9 +950,6 @@ public:
 			pos.x.SetAnimationStartValue(WindowSize.x / 2);
 			pos.y.SetAnimationStartValue(WindowSize.y);
 			pos.y.SetAnimation(WindowSize.y - BasicSize - UISpace, TotalFrame);
-
-			//设置缩放动画
-			yScale.SetAnimationStartValue(100);
 
 			CenterX = 0.5;
 
@@ -1264,13 +1255,8 @@ public:
 			{
 				static int ExpPos = WindowSize.y - BasicSize - UISpace;
 				pos.y.SetAnimation(ExpPos, TotalFrame);
-
-				yScale.SetAnimationStartValue(ScaleStrgengh);
-				yScale.SetAnimation(100, TotalFrame);
 			}
 		}
-
-		if(pos.y.frame > MinFrame) yScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
 
 		if(User::EnableBack) DrawBack(window);
 
@@ -1278,7 +1264,6 @@ public:
 		
 		s.setPosition({ pos.x.value - 1- size.x.value * CenterX,pos.y.value - 1 - size.y.value * CenterY });
 		s.setColor(Color(255, 255, 255, UIAlpha));
-		s.setScale(Vector2f(1, yScale.value / 100.0));
 		window.draw(s);
 
 		NeedReDraw = false;
@@ -1290,8 +1275,11 @@ public:
 	void SetTool(int index)
 	{
 		//更新图标动画
-		IconYOffset[index].SetAnimation(-UISpace / 2, TotalFrame);
-		IconYOffset[Tool::ToolCount].SetAnimation(0, TotalFrame);
+		if(index != Tool::ToolCount)
+		{
+			IconYOffset[index].SetAnimation(-UISpace / 2, TotalFrame);
+			IconYOffset[Tool::ToolCount].SetAnimation(0, TotalFrame);
+		}
 		IconScale[index].SetAnimationStartValue(60);
 		IconScale[index].SetAnimation(100, TotalFrame);
 
@@ -1312,7 +1300,7 @@ public:
 	void UpdatePenCap()
 	{
 		IconScale[0].SetAnimationStartValue(50);
-		IconScale->SetAnimation(100, TotalFrame);
+		IconScale[0].SetAnimation(100, TotalFrame);
 	}
 
 	void exp()
@@ -1677,11 +1665,6 @@ class MoreBar
 		MainToolBar.SetTool(0);
 		XMsg::ClearMsg();
 		XMsg::SetSleepTime(10);
-	}
-	void EnableTempLayer()
-	{
-		Write::EnableTempLayer(!ETempLayer);
-		ETempLayer = !ETempLayer;
 	}
 
 	//绘制笔更多设置
@@ -2191,6 +2174,12 @@ class MoreBar
 	}
 
 public:
+
+	void EnableTempLayer()
+	{
+		Write::EnableTempLayer(!ETempLayer);
+		ETempLayer = !ETempLayer;
+	}
 
 	bool Visible = false;
 
@@ -2955,9 +2944,6 @@ class MinBox
 		NeedEnterMin = true;
 	}
 
-	//缩放
-	EV yScale;
-
 public:
 
 	EV2 pos, size;
@@ -2984,9 +2970,6 @@ public:
 			pos.x.SetAnimation(UISpace * 2 + BasicSize, TotalFrame);
 
 			pos.y.SetAnimationStartValue(WindowSize.y - UISpace);
-
-			//设置缩放动画
-			yScale.SetAnimationStartValue(100);
 
 			NeedReDraw = true;
 
@@ -3046,13 +3029,10 @@ public:
 			Tool::IsInBar = true;
 		}
 
-		if (pos.y.frame > MinFrame) yScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
-
 		Sprite s(rt.getTexture());
 		
 		s.setPosition({ pos.x.value - 1,pos.y.value - 1 - CenterY * size.y.value });
 		s.setColor(Color(255, 255, 255, UIAlpha));
-		s.setScale(Vector2f(1, yScale.value / 100.0));
 		window.draw(s);
 
 		//自动回放检测
@@ -3063,9 +3043,6 @@ public:
 			{
 				static int ExpPos = WindowSize.y - UISpace;
 				pos.y.SetAnimation(ExpPos, TotalFrame);
-
-				yScale.SetAnimationStartValue(ScaleStrgengh);
-				yScale.SetAnimation(100, TotalFrame);
 			}
 		}
 
@@ -3100,9 +3077,6 @@ class StartBar
 	float CenterY = 1;
 
 	int exptime = -1;
-
-	//缩放
-	EV yScale;
 
 	void Exit(RenWin& window)
 	{
@@ -3183,7 +3157,6 @@ public:
 
 		s.setPosition({ pos.x.value - 1,pos.y.value - 1 - size.y.value * CenterY });
 		s.setColor(Color(255, 255, 255, UIAlpha));
-		s.setScale(Vector2f(1, yScale.value / 100.0));
 		window.draw(s);
 	}
 
@@ -3224,9 +3197,6 @@ public:
 			pos.x.SetAnimation(UISpace, TotalFrame);
 
 			pos.y.SetAnimationStartValue(WindowSize.y - UISpace);
-
-			//设置缩放动画
-			yScale.SetAnimationStartValue(100);
 
 			NeedReDraw = true;
 
@@ -3480,15 +3450,12 @@ public:
 			Tool::IsInBar = true;
 		}
 
-		if (pos.y.frame > MinFrame) yScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
-
 		if(User::EnableBack) DrawBack(window);
 
 		Sprite s(rt.getTexture());
 		
 		s.setPosition({ pos.x.value - 1,pos.y.value - 1 - CenterY  * size.y.value});
 		s.setColor(Color(255, 255, 255, UIAlpha));
-		s.setScale(Vector2f(1, yScale.value / 100.0));
 		window.draw(s);
 
 		//自动回放检测
@@ -3499,9 +3466,6 @@ public:
 			{
 				static int ExpPos = WindowSize.y - UISpace;
 				pos.y.SetAnimation(ExpPos, TotalFrame);
-
-				yScale.SetAnimationStartValue(ScaleStrgengh);
-				yScale.SetAnimation(100, TotalFrame);
 			}
 		}
 
@@ -3546,9 +3510,6 @@ class PageBar
 
 	//收缩时间
 	int exptime = -1;
-
-	//缩放
-	EV yScale;
 
 public:
 	EV2 pos, size;
@@ -3614,7 +3575,6 @@ public:
 
 		s.setPosition({ pos.x.value - 1,pos.y.value - 1 - size.y.value * CenterY });
 		s.setColor(Color(255, 255, 255, UIAlpha));
-		s.setScale(Vector2f(1, yScale.value / 100.0));
 		window.draw(s);
 	}
 	void Draw(RenWin& window)
@@ -3638,9 +3598,6 @@ public:
 
 			size.x.SetAnimationStartValue(BasicSize * 3);
 			size.y.SetAnimationStartValue(BasicSize);
-
-			//设置缩放动画
-			yScale.SetAnimationStartValue(100);
 
 			TextAlpha.SetAnimation(255, TotalFrame);
 
@@ -3875,15 +3832,12 @@ public:
 			Tool::IsInBar = true;
 		}
 
-		if (pos.y.frame > MinFrame) yScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
-
 		if(User::EnableBack) DrawBack(window);
 
 		Sprite s(rt.getTexture());
 		
 		s.setPosition({ pos.x.value - 1,pos.y.value - 1 - CenterY * size.y.value });
 		s.setColor(Color(255, 255, 255, UIAlpha));
-		s.setScale(Vector2f(1, yScale.value / 100.0));
 		window.draw(s);
 
 		//自动回放检测
@@ -3894,9 +3848,6 @@ public:
 			{
 				static int ExpPos = WindowSize.y - BasicSize - UISpace;
 				pos.y.SetAnimation(ExpPos, TotalFrame);
-
-				yScale.SetAnimationStartValue(ScaleStrgengh);
-				yScale.SetAnimation(100, TotalFrame);
 			}
 		}
 
@@ -5044,9 +4995,6 @@ class TagBox_Camera
 		WriteCamera::ManageAutoPhoto();
 	}
 
-	//缩放
-	EV yScale;
-
 public:
 
 	void ManageCamera(RenWin& window)
@@ -5163,7 +5111,6 @@ public:
 
 		s.setPosition({ pos.x.value - 1 + MainToolBar.size.x.value / 2 + UISpace,pos.y.value - 1 - CenterY * size.y.value });
 		s.setColor(Color(255, 255, 255, UIAlpha));
-		s.setScale(Vector2f(1, yScale.value / 100.0));
 		window.draw(s);
 	}
 	void Draw(RenWin& window)
@@ -5222,9 +5169,6 @@ public:
 
 			pos.y.SetAnimationStartValue(WindowSize.y + BasicSize);
 			pos.y.SetAnimation(WindowSize.y - UISpace,TotalFrame);
-
-			//设置缩放动画
-			yScale.SetAnimationStartValue(100);
 
 			NeedReDraw = true;
 
@@ -5400,15 +5344,12 @@ public:
 			Tool::IsInBar = true;
 		}
 
-		if (pos.y.frame > MinFrame) yScale.UpdateAnimation(XEase::EaseBasic::easeOutBack, 1.5);
-
 		if(User::EnableBack) DrawBack(window);
 
 		Sprite s(rt.getTexture());
 		
 		s.setPosition({ pos.x.value - 1 + MainToolBar.size.x.value / 2 + UISpace,pos.y.value - 1 - CenterY * size.y.value });
 		s.setColor(Color(255, 255, 255, UIAlpha));
-		s.setScale(Vector2f(1, yScale.value / 100.0));
 		window.draw(s);
 
 		//自动回放检测
@@ -5419,9 +5360,6 @@ public:
 			{
 				static int ExpPos = WindowSize.y - UISpace;
 				pos.y.SetAnimation(ExpPos, TotalFrame);
-
-				yScale.SetAnimationStartValue(ScaleStrgengh);
-				yScale.SetAnimation(100, TotalFrame);
 			}
 		}
 
@@ -5476,7 +5414,7 @@ void Tool::Draw(RenWin& window)
 
 		BasicSize = WindowSize.x / 21;
 		UISpace = WindowSize.x * 0.01;
-		RoundSize = WindowSize.x / 100;
+		RoundSize = WindowSize.x / 80;
 
 		IconSize = BasicSize * 0.7;
 
@@ -5598,4 +5536,20 @@ void Tool::Exp::ExpRightScrollBar()
 void Tool::UpdatePage()
 {
 	UpdatePageBar();
+}
+
+void Tool::SetMainToolCount(int num)
+{
+	MainToolBar.SetTool(num);
+}
+
+void Tool::StartCamera(RenWin& window)
+{
+	if (WriteCamera::EnableWriteCamera) return;
+	else Tag_CameraToolBar.ManageCamera(window);
+}
+
+void Tool::StartTempLayer()
+{
+	MoreToolBar.EnableTempLayer();
 }

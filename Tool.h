@@ -32,6 +32,11 @@ public:
 
 	static void ShowPhotoWindow();
 
+	static void SetMainToolCount(int num);
+	static void StartCamera(RenWin& window);
+
+	static void StartTempLayer();
+
 	class Exp
 	{
 	public:

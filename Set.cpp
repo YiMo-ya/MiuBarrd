@@ -61,7 +61,7 @@ static float DrawCircleSlider(
 	}
 
 	//滑块圆
-	int knobR = (int)(h / 5 * knobScale.value / 100.0);
+	int knobR = (int)(h / 10 * knobScale.value / 100.0);
 	int knobX = trackX + fillW;
 	int knobY = y + h / 2;
 
@@ -118,12 +118,12 @@ struct ToggleState
 //绘制开关按钮（参考 ToggleUI：滑块位移 + 颜色插值 + 背景淡入淡出）
 static bool DrawSwitch(int x, int y, int w, int h, bool on, ToggleState& st, RenWin& window)
 {
-	const int TotalFrame = 12;
+	const int TotalFrame = 30;
 	const Color OffColor = Color(70, 70, 70);
 	const Color OnColor = User::MainColor;
 	const Color OnCircleColor = Color(255, 255, 255);
 
-	int RoundSize = h / 2 - h / 8;
+	int RoundSize = h / 2 - h / 7;
 	int Off = RoundSize + w / 20;
 	int On = w - RoundSize - w / 20;
 
