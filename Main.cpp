@@ -271,8 +271,9 @@ void StartAnimation(int PosStartX,int PosStartY,int SizeStartX,int SizeStartY, R
 			XText::SetFontSize(ScreenSize.x / 50);
 			XText::Xyprintf(WindowSize.x / 2, WindowSize.y / 3, L"MiuBarrd白板", window);
 			XText::SetFontSize(ScreenSize.x / 70);
-			XText::Xyprintf(WindowSize.x / 2, WindowSize.y / 2, emoji[emo], window);
-			XText::Xyprintf(WindowSize.x / 2, WindowSize.y / 1.6, L"--- Loading ---", window);
+			XText::Xyprintf(WindowSize.x / 2, WindowSize.y / 1.9, emoji[emo], window);
+			XText::SetFontSize(ScreenSize.x / 80);
+			XText::Xyprintf(WindowSize.x / 2, WindowSize.y / 1.4, L"--- Loading ---", window);
 		}
 	}
 }

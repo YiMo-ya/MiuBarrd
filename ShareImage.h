@@ -224,10 +224,11 @@ private:
 
     /// 接收图片上传：解析 multipart 或裸 body，成功则入队。
     /// <param name="s">客户端套接字。</param>
-    /// <param name="body">请求体原始字节。</param>
+    /// <param name="body">请求体原始字节；以右值引用接收，调用方需用 std::move 移交所有权，
+    /// 避免 2MB 级图片字节被整段拷贝一次。</param>
     /// <param name="contentType">请求头 Content-Type。</param>
     /// <param name="fileName">上传文件名（来自查询串 name 参数，可能为空）。</param>
-    void handleUpload(SOCKET s, const std::vector<uint8_t>& body,
+    void handleUpload(SOCKET s, std::vector<uint8_t>&& body,
         const std::string& contentType,
         const std::string& fileName);
 
@@ -253,7 +254,7 @@ private:
     static std::vector<uint8_t> parseBody(const std::vector<uint8_t>& raw);
 
     /// 解析 multipart/form-data 请求体，取出第一个文件字段的内容。
-    static SharedImage parseMultipart(const std::vector<uint8_t>& body,
+    static SharedImage parseMultipart(std::vector<uint8_t>&& body,
         const std::string& boundary);
 
     /// 读取内置上传网页 HTML（首次访问时缓存）。
