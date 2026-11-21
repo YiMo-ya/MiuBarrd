@@ -34,6 +34,8 @@ static bool LoadIcon(IMAGE& img, wstring path)
 		//执行错误处理
 		XImage::NewImage(img, ImgPath + L"Error.dll");
 
+		DebugClass::PushMsg(L"Load Img Error " + path);
+
 		return false;
 	}
 	return true;
@@ -1172,6 +1174,8 @@ public:
 						//更新值
 						Tool::ToolCount = i;
 
+						DebugClass::PushMsg(L"Set Tool" + to_wstring(i));
+
 						//隐藏更多工具栏
 						Tool::HideMoreBar();
 
@@ -1191,12 +1195,22 @@ public:
 							BottomLineScale.SetAnimation(100, TotalFrame);
 
 							//召唤更多选项
-							if (i == 5) Ext();
-							else if(i != 3 && i != 2) UpdateMoreBarVisible();
+							if (i == 5)
+							{
+								DebugClass::PushMsg(L"Exten");
+								Ext();
+							}
+							else if(i != 3 && i != 2)
+							{
+								DebugClass::PushMsg(L"More Tool");
+
+								UpdateMoreBarVisible();
+							}
 						}
 						else
 						{
 							UnDo();
+							DebugClass::PushMsg(L"Un Do");
 						}
 					}
 				}
@@ -1216,6 +1230,8 @@ public:
 					{
 						Write::ResetMove();
 						BottomMessage::AddMessage(107, L"已复位", BottomMessageType_INFO, 180);
+
+						DebugClass::PushMsg(L"ReMove");
 					}
 					if (i == 4)
 					{
@@ -1231,6 +1247,8 @@ public:
 							BottomMessage::ResetY();
 							BottomMessage::UpdateCurretnMessageTime(180);
 						}
+
+						DebugClass::PushMsg(L"Clear All");
 
 						SetTool(0);
 						XMsg::ClearMsg();
@@ -1296,6 +1314,8 @@ public:
 
 		//隐藏更多工具栏
 		Tool::HideMoreBar();
+
+		DebugClass::PushMsg(L"Set Tool" + to_wstring(index));
 	}
 	void UpdatePenCap()
 	{
@@ -1938,6 +1958,8 @@ class MoreBar
 					BottomLineScale.SetAnimation(100, TotalFrame);
 					PenCapScale[Tool::PenCap].SetAnimationStartValue(40);
 					PenCapScale[Tool::PenCap].SetAnimation(100, TotalFrame);
+
+					DebugClass::PushMsg(L"Set Pen Cap " + to_wstring(i));
 				}
 			}
 
@@ -1952,6 +1974,8 @@ class MoreBar
 				{
 					Tool::Tool::PenSize = PerSetPenSize[i];
 
+					DebugClass::PushMsg(L"Set Pen Size " + to_wstring(PerSetPenSize[i]));
+
 					PenSizeRectScale.SetAnimationStartValue(30);
 					PenSizeRectScale.SetAnimation(100, TotalFrame);
 				}
@@ -1963,6 +1987,8 @@ class MoreBar
 				if (XMsg::MouseMsg::IsMouseIn(x[i] - RectSize / 2, y - RectSize / 2 + pos.y.value, RectSize, RectSize))
 				{
 					Tool::Tool::PenSize = PerSetPenSize[i + 2];
+
+					DebugClass::PushMsg(L"Set Pen Size " + to_wstring(PerSetPenSize[i + 2]));
 
 					PenSizeRectScale.SetAnimationStartValue(30);
 					PenSizeRectScale.SetAnimation(100, TotalFrame);
@@ -1981,6 +2007,8 @@ class MoreBar
 				{
 					Tool::PenColor = PersetPenColor[i];
 
+					DebugClass::PushMsg(L"Set Pen Color " + to_wstring(i));
+
 					MainToolBar.Update();
 
 					PenColorRectScale.SetAnimationStartValue(30);
@@ -1998,6 +2026,8 @@ class MoreBar
 					if (XMsg::MouseMsg::IsMouseIn(pos.x.value + x, pos.y.value + y, ColorRectSize, ColorRectSize))
 					{
 						Tool::PenColor = PersetPenColor[8 + i];
+
+						DebugClass::PushMsg(L"Set Pen Color " + to_wstring(8 + i));
 
 						MainToolBar.Update();
 
@@ -2141,12 +2171,16 @@ class MoreBar
 					if (i == 0)
 					{
 						EraseAll();
+
+						DebugClass::PushMsg(L"Clear All");
 					}
 					//启用/禁用草稿层
 					if (i == 1)
 					{
 						EnableTempLayer();
 						NeedReDraw = PerNeedRedraw = true;
+
+						DebugClass::PushMsg(L"Change TempLayer");
 					}
 
 					IconScale[i].SetAnimationStartValue(40);
@@ -2702,6 +2736,8 @@ class ExtBar
 			if (XFile::Exists(path))
 			{
 				ShellExecuteW(NULL, L"open", path.c_str(), NULL, GetDirOfFile(path).c_str(), SW_SHOW);
+
+				DebugClass::PushMsg(L"Run Exe " + path);
 			}
 			else
 			{

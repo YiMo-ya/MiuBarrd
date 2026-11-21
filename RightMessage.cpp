@@ -2,6 +2,7 @@
 #include "Shared.h"
 #include "User.h"
 #include "SoundPlayer.h"
+#include "Debug.h"
 #include <deque>
 
 NOXS; NOSTD;
@@ -203,6 +204,8 @@ void RightMessage::ShowMessage(wstring text, wstring title, RightMessageType typ
 	}
 	if (RightMessageColor_Border[0] == Color::White) RightMessageColor_Border[0] = User::MainColor;
 	if (!User::EnableAnimation) msg.img.color = RightMessageColor_Border[msg.type];
+
+	DebugClass::PushMsg(L"RightMessage " + text + L" " + title);
 }
 
 void RightMessage::SetVisible(bool v)

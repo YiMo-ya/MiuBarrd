@@ -1,6 +1,7 @@
 #include "BottomMessage.h"
 #include "Shared.h"
 #include "User.h"
+#include "Debug.h"
 #include <deque>
 
 NOXS; NOSTD;
@@ -48,6 +49,8 @@ void BottomMessage::AddMessage(int id,wstring text, BottomMessageType type, int 
 	{
 		BottomMessageColor_Border[0] = User::MainColor;
 	}
+
+	DebugClass::PushMsg(L"BottomMessage " + text + L" " + to_wstring(id));
 }
 
 //处理消息

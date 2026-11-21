@@ -1,7 +1,7 @@
 ﻿#include "ShareCamera.h"
 #include "ShareImage.h"
 #include "ShareFile.h"
-#include "ShareImage.h"
+#include "Debug.h"
 #include "Write.h"
 #include "Tool.h"
 #include "Shared.h"
@@ -3763,8 +3763,16 @@ void DrawLayer(RenderTarget& window)
 								if (!pd.Data[i].empty())
 									RecordEraseSnapshot(i, pd.Data[i]);
 
+								DebugClass::PushMsg(
+									L"Erase " +
+									to_wstring((int)pd.Data[i].back().x) + L" " + to_wstring((int)pd.Data[i].back().y) + L" " +
+									to_wstring((int)pd.Data[i].back().x2) + L" " + to_wstring((int)pd.Data[i].back().y2) + L" " +
+									to_wstring((int)pd.Data[i].back().StartX) + L" " + to_wstring((int)pd.Data[i].back().StartY) + L" " +
+									to_wstring((int)pd.Data[i].back().w));
+
 								swap(pd.Data[i][k], pd.Data[i].back());
 								pd.Data[i].pop_back();
+
 								--k;
 								continue;
 							}
@@ -4990,6 +4998,12 @@ void WriteSub(RenWin& window)
 			AdjustLineManager(WritePos);
 
 			WriteDataTemp.push_back(NewData);
+			DebugClass::PushMsg(
+				L"Write " + 
+				to_wstring((int)NewData.x) + L" " + to_wstring((int)NewData.y) + L" " +
+				to_wstring((int)NewData.x2) + L" " + to_wstring((int)NewData.y2) + L" " +
+				to_wstring((int)NewData.StartX) + L" " + to_wstring((int)NewData.StartY) + L" " +
+				to_wstring((int)NewData.w));
 
 			static int MAX_ADJUSTlINE_SHOW_BLOCK = 35 * ScreenScale;
 			if (WriteDataTemp.size() > MAX_ADJUSTlINE_SHOW_BLOCK) AdjustLineLine.enabled = false;

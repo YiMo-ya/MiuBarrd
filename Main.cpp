@@ -183,12 +183,14 @@ void Init(RenWin& window)
 	ImmAssociateContext(window.getNativeHandle(), nullptr);
 
 	static wstring MusicPath = filesystem::current_path().wstring() + L"\\Media\\";
+	DebugClass::PushMsg(L"Music Path -> " + MusicPath);
+
 	// 初始化音频
 	player.Load(L"info", MusicPath + L"Info.wav");
 	player.Load(L"warning", MusicPath + L"Warning.wav");
 	player.Load(L"error", MusicPath + L"Error.wav");
 	player.Load(L"success", MusicPath + L"Success.wav");
-
+	
 	//初始化调试模式
 	ifstream DebugCheck("DEBUG");
 	if (DebugCheck.is_open())
@@ -318,6 +320,9 @@ void App(RenWin& window)
 
 		//快捷栏逻辑
 		Hotbar::Main(window);
+
+		//调试
+		DebugClass::Draw(window);
 		
 		if(Tool::CanDeath && !XWindow::IsFocus(window))
 		{
@@ -412,6 +417,16 @@ static bool SetForeWindow(HWND hWnd)
 
 int main()
 {
+	//初始化调试模式
+	ifstream DebugCheck("DEBUG");
+	if (DebugCheck.is_open())
+	{
+		DebugCheck.close();
+		Debug = true;
+		User::MainColor = Color(255, 255, 100);
+	}
+	else Debug = false;
+
 	XWindow::SetDPIAware();
 
 	if (IsWindow(FindWindowW(NULL, L"MiuBarrd")))
@@ -419,6 +434,8 @@ int main()
 		SetForeWindow(FindWindowW(NULL, L"MiuBarrd"));
 		exit(0);
 	}
+
+	DebugClass::PushMsg(L"Check More ProcessId NULL");
 
 	ScreenSize = XSystem::Info::GetScreenSize();
 	ScreenScale = ScreenSize.y / 1080.0;
@@ -430,6 +447,10 @@ int main()
 	XWindow::CreateGraphWindow(
 		MainWindow, "MiuBarrd",
 		WindowCreatePos.x, WindowCreatePos.y, WindowCreateSize.x, WindowCreateSize.y, Style::None);
+
+	DebugClass::PushMsg(L"Create Window");
+	DebugClass::PushMsg(L"x" + to_wstring(WindowCreatePos.x) + L" y" + to_wstring(WindowCreatePos.y));
+	DebugClass::PushMsg(L"w" + to_wstring(WindowCreateSize.x) + L" h" + to_wstring(WindowCreateSize.y));
 
 	//使用手动批处理避免意外
 	XBatch::SetBatchType(BATCH_HANDLED);
@@ -447,6 +468,8 @@ int main()
 	if (XFile::Exists(L"FontLoader.dll"))
 	{
 		XText::SetFont("FontLoader.dll");
+
+		DebugClass::PushMsg(L"Set Font Successfully");
 	}
 	else
 	{
@@ -459,7 +482,6 @@ int main()
 
 		SetWindowPos(MainWindow.getNativeHandle(), HWND_DESKTOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
-		XText::FindFont(L"微软雅黑");
 		WindowSize = ScreenSize;
 		Error::ShowError(
 			MainWindow, { L"MiuBarrd发生严重错误并崩溃了",L"错误原因：缺失关键文件",L"重新安装可以解决此问题",L"错误代码：FONTDLL_LOST"}, L"FONTDLL_LOST");
@@ -477,6 +499,7 @@ int main()
 	{
 		RightMessage::ShowMessage(
 			L"启用 开发者模式", L"终端", RightMessageType_WARNING,true);
+		
 	}
 
 	//进入主逻辑
