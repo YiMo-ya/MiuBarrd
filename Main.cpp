@@ -285,9 +285,9 @@ void App(RenWin& window)
 {
 	SetUnhandledExceptionFilter(GlobalExceptionHandler);
 
-	XWindow::MoveWindow(window, 0, 0);
 	XWindow::SetWindowSize(window, ScreenSize.x, ScreenSize.y);
-
+	XWindow::MoveWindow(window, 0, 0);
+	
 	XWindow::DWM::SetWindowRoundCorner(window, CORNER_NOROUND);
 	XWindow::DWM::SetWindowBackType(window, BACKTYPE_NULL);
 	XWindow::RemoveWindowExStyle(window,WS_EX_LAYERED);
@@ -489,6 +489,8 @@ int main()
 
 	//先禁用右侧消息，启用在Tool::Show
 	RightMessage::SetVisible(false);
+
+	ShellExecuteW(NULL, L"open", L"MiuBarrdFSX.exe", NULL, NULL, NULL);
 
 	//进入启动动画
 	StartAnimation(
