@@ -1,5 +1,6 @@
 #include "Debug.h"
 #include "Shared.h"
+#include "Write.h"
 #include <pdhmsg.h>
 #include <pdh.h>
 #include <d3dkmthk.h>
@@ -451,6 +452,9 @@ void DrawLeft(RenWin& window)
     XText::Xyprintf(Pos.x, Pos.y + Space * 4, L"TOUCHPOS >> " + to_wstring(MousePos.x) + L" " + to_wstring(MousePos.y),window);
     int TouchNum = XMsg::TouchMsg::GetTouchNum();
     XText::Xyprintf(Pos.x, Pos.y + Space * 5, L"TOUCHNUM >> " + to_wstring(TouchNum), window);
+
+    int WriteSize = WriteUsage::GetSize();
+    XText::Xyprintf(Pos.x, Pos.y + Space * 6, L"DataSize >> " + to_wstring(WriteSize), window);
 }
 
 void DrawRight(RenWin& window)

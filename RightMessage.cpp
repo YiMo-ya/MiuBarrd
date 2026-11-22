@@ -120,7 +120,7 @@ void RightMessage::Manage(RenWin& window)
 }
 
 // 按视觉占位长度分割宽字符串，汉字等 CJK 字符计 2，ASCII 计 1
-vector<wstring> SplitWStringByWidth(const wstring& input, int maxLen)
+static vector<wstring> SplitWStringByWidth(const wstring& input, int maxLen)
 {
 	vector<wstring> result;
 	if (input.empty()) return result;

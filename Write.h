@@ -56,6 +56,12 @@ public:
 	static bool AddImageFromMemory(const void* data, size_t size);
 };
 
+class WriteUsage
+{
+public:
+	static int GetSize();
+};
+
 
 class ImageManager
 {

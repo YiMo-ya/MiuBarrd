@@ -7882,3 +7882,20 @@ void ShareWriteImage::PollShareImage()
 }
 
 #pragma endregion
+
+int WriteUsage::GetSize()
+{
+	if(!PageData.empty())
+	{
+		if (!PageData[Write::Page].Data.empty())
+		{
+			return (PageData[Write::Page].Data.size() - 1) * MAX_MEMORY_BLOCK + PageData[Write::Page].Data.back().size();
+		}
+		else
+			return 0;
+	}
+	else
+	{
+		return 0;
+	}
+}

@@ -168,6 +168,7 @@
     <ClCompile Include="ShareFile.cpp" />
     <ClCompile Include="ShareImage.cpp" />
     <ClCompile Include="SoundPlayer.cpp" />
+    <ClCompile Include="Suggestion.cpp" />
     <ClCompile Include="Tool.cpp" />
     <ClCompile Include="Update.cpp" />
     <ClCompile Include="User.cpp" />
@@ -194,6 +195,7 @@
     <ClInclude Include="ShareFile.h" />
     <ClInclude Include="ShareImage.h" />
     <ClInclude Include="SoundPlayer.h" />
+    <ClInclude Include="Suggestion.h" />
     <ClInclude Include="Tool.h" />
     <ClInclude Include="Update.h" />
     <ClInclude Include="User.h" />

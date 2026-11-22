@@ -11,6 +11,7 @@
 #include "Update.h"
 #include "Error.h"
 #include "Hotbar.h"
+#include "AI.h"
 #include <dbghelp.h>
 #include <iostream>
 #pragma comment(lib, "dbghelp.lib")
@@ -314,6 +315,9 @@ void App(RenWin& window)
 		//绘制消息框架
 		BottomMessage::MessageManage(window);
 		RightMessage::Manage(window);
+
+		//绘制AI
+		AI::Draw(window);
 
 		//书写逻辑
 		Write::WriteT(window);
